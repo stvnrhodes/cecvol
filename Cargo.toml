@@ -1,0 +1,7 @@
+[package]
+name = "cecvol"
+version = "0.1.0"
+authors = ["Steven Rhodes <rhodes.steven@gmail.com>"]
+edition = "2018"
+
+[dependencies]
