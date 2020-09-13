@@ -5,3 +5,4 @@ authors = ["Steven Rhodes <rhodes.steven@gmail.com>"]
 edition = "2018"
 
 [dependencies]
+cec-rs = "2.0.1"
