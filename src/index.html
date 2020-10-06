@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>cecvol</title>
+    <script>
+        function sendVol(level) {
+            fetch('/fulfillment', {
+                method: 'POST',
+                mode: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    'requestId': 'no-id',
+                    'inputs': [{
+                        'intent': 'action.devices.EXECUTE',
+                        'payload': {
+                            'commands': [{
+                                'devices': [{
+                                    'id': '123'
+                                }],
+                                'execution': [{
+                                    'command': 'action.devices.commands.volumeRelative',
+                                    'params': {
+                                        'relativeSteps': level
+                                    }
+                                }]
+                            }]
+                        }
+                    }]
+                })
+            }
+            )
+                .then(response => response.json())
+                .then(data => console.log(data));
+        }
+    </script>
+</head>
+
+<body>
+    <h1>abcb</h1>
+    <p>def</p>
+    <p>
+        <button onclick="sendVol(-5)">-5</button>
+        <button onclick="sendVol(-1)">-1</button>
+        <button onclick="sendVol(1)">+1</button>
+        <button onclick="sendVol(5)">+5</button>
+    </p>
+    <p><button onclick="mute()">mute</button></p>
+    <p>
+        <button onclick="sendVol(-5)">-5</button>
+        <button onclick="sendVol(-1)">-1</button>
+        <button onclick="sendVol(1)">+1</button>
+        <button onclick="sendVol(5)">+5</button>
+    </p>
+</body>
+
+</html>
