@@ -1,89 +1,42 @@
-// use actix::prelude::*;
+use cec_rs::{CecConnection, CecConnectionResultError};
+use std::fmt;
 
-// use cec_rs::{
-//     CecCommand, CecConnection, CecConnectionCfgBuilder, CecDeviceType, CecDeviceTypeVec,
-//     CecKeypress,
-// };
+#[derive(Debug)]
+pub struct CECError {
+    err: CecConnectionResultError,
+}
+impl actix_http::ResponseError for CECError {}
+impl fmt::Display for CECError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.err)
+    }
+}
+impl From<CecConnectionResultError> for CECError {
+    fn from(err: CecConnectionResultError) -> CECError {
+        CECError { err: err }
+    }
+}
 
-// struct VolumeState {
-//     current_volume: i32,
-//     is_muted: bool,
-// }
+pub struct CEC {
+    conn: CecConnection,
+}
 
-// #[derive(Message)]
-// #[rtype(result = "Result<bool, std::io::Error>")]
-// struct Mute {
-//     mute: bool,
-// }
+impl CEC {
+    pub fn new(conn: CecConnection) -> Self {
+        CEC { conn }
+    }
 
-// #[derive(Message)]
-// #[rtype(result = "Result<bool, std::io::Error>")]
-// struct SetVolume {
-//     volume_level: i32,
-// }
-
-// #[derive(Message)]
-// #[rtype(result = "Result<bool, std::io::Error>")]
-// struct VolumeRelative {
-//     relative_steps: i32,
-// }
-
-// // Messages
-// //
-// /// Define message
-// #[derive(Message)]
-// #[rtype(result = "Result<bool, std::io::Error>")]
-// struct Ping;
-
-// // Define actor
-// pub struct CECActor {
-//     conn: CecConnection,
-// }
-
-// // Provide Actor implementation for our actor
-// impl Actor for CECActor {
-//     type Context = Context<Self>;
-
-//     fn started(&mut self, ctx: &mut Context<Self>) {
-//         let cfg = CecConnectionCfgBuilder::default()
-//             .port("RPI".into())
-//             .device_name("Pi".into())
-//             .activate_source(false) /* Don't auto-turn on the TV */
-//             .device_types(CecDeviceTypeVec::new(CecDeviceType::RecordingDevice))
-//             .key_press_callback(Box::new(on_key_press))
-//             .command_received_callback(Box::new(on_command_received))
-//             .build()
-//             .unwrap();
-//         let conn = cfg.open().unwrap();
-//         println!("CECActor is alive");
-//     }
-
-//     fn stopped(&mut self, ctx: &mut Context<Self>) {
-//         println!("Actor is stopped");
-//     }
-// }
-
-// /// Define handler for `Ping` message
-// impl Handler<Ping> for CECActor {
-//     type Result = Result<bool, std::io::Error>;
-
-//     fn handle(&mut self, msg: Ping, ctx: &mut Context<Self>) -> Self::Result {
-//         println!("Ping received");
-
-//         Ok(true)
-//     }
-// }
-
-// fn on_key_press(keypress: CecKeypress) {
-//     println!(
-//         "onKeyPress: {:?}, keycode: {:?}, duration: {:?}",
-//         keypress, keypress.keycode, keypress.duration
-//     );
-// }
-
-// fn on_command_received(command: CecCommand) {
-//     println!(
-//         "onCommandReceived:  opcode: {:?}, initiator: {:?}",
-//         command.opcode, command.initiator
-//     );
-// }
+    pub fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
+        if relative_steps > 0 {
+            for _ in 0..relative_steps {
+                self.conn.volume_up(true)?;
+            }
+        } else if relative_steps < 0 {
+            for _ in relative_steps..0 {
+                self.conn.volume_down(true)?;
+            }
+        }
+        Ok(())
+    }
+}
+unsafe impl Send for CEC {}

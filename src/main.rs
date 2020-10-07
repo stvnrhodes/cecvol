@@ -1,14 +1,12 @@
 use actix_http::Response;
 use actix_web::{get, middleware, post, web, App, HttpServer, Responder};
-use cec_rs::{
-    CecCommand, CecConnection, CecConnectionCfgBuilder, CecConnectionResultError, CecDeviceType,
-    CecDeviceTypeVec, CecKeypress,
-};
+use cec_rs::{CecCommand, CecConnectionCfgBuilder, CecDeviceType, CecDeviceTypeVec, CecKeypress};
 use env_logger::Env;
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::fmt;
 use std::sync::Mutex;
+
+mod cec;
 
 #[derive(Deserialize)]
 struct AuthInfo {
@@ -443,7 +441,7 @@ struct FulfillmentResponse {
 #[post("/fulfillment")]
 async fn fulfillment(
     req: web::Json<FulfillmentRequest>,
-    cec: CECData,
+    cec: web::Data<Mutex<cec::CEC>>,
 ) -> Result<web::Json<FulfillmentResponse>, actix_web::Error> {
     let request_id = req.request_id.clone();
     for input in &req.inputs {
@@ -503,43 +501,6 @@ async fn fulfillment(
     }))
 }
 
-#[derive(Debug)]
-struct CECError {
-    err: CecConnectionResultError,
-}
-impl actix_http::ResponseError for CECError {}
-impl fmt::Display for CECError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.err)
-    }
-}
-impl From<CecConnectionResultError> for CECError {
-    fn from(err: CecConnectionResultError) -> CECError {
-        CECError { err: err }
-    }
-}
-
-struct CEC {
-    conn: CecConnection,
-}
-
-type CECData = web::Data<Mutex<CEC>>;
-impl CEC {
-    fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
-        if relative_steps > 0 {
-            for _ in 0..relative_steps {
-                self.conn.volume_up(true)?;
-            }
-        } else if relative_steps < 0 {
-            for _ in relative_steps..0 {
-                self.conn.volume_down(true)?;
-            }
-        }
-        Ok(())
-    }
-}
-unsafe impl Send for CEC {}
-
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::from_env(Env::default().default_filter_or("debug")).init();
@@ -553,9 +514,7 @@ async fn main() -> anyhow::Result<()> {
         .command_received_callback(Box::new(on_command_received))
         .build()
         .unwrap();
-    let conn = web::Data::new(Mutex::new(CEC {
-        conn: cfg.open().unwrap(),
-    }));
+    let conn = web::Data::new(Mutex::new(cec::CEC::new(cfg.open().unwrap())));
 
     HttpServer::new(move || {
         App::new()

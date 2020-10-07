@@ -5,8 +5,13 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>cecvol</title>
+    <style>
+        button {
+            padding: 20px;
+        }
+    </style>
     <script>
-        function sendVol(level) {
+        function executeCommand(cmd) {
             fetch('/fulfillment', {
                 method: 'POST',
                 mode: 'same-origin',
@@ -22,12 +27,7 @@
                                 'devices': [{
                                     'id': '123'
                                 }],
-                                'execution': [{
-                                    'command': 'action.devices.commands.volumeRelative',
-                                    'params': {
-                                        'relativeSteps': level
-                                    }
-                                }]
+                                'execution': []
                             }]
                         }
                     }]
@@ -36,6 +36,38 @@
             )
                 .then(response => response.json())
                 .then(data => console.log(data));
+        }
+        function sendVol(level) {
+            executeCommand({
+                'command': 'action.devices.commands.volumeRelative',
+                'params': {
+                    'relativeSteps': level
+                }
+            })
+        }
+        function mute(mute) {
+            executeCommand({
+                'command': 'action.devices.commands.mute',
+                'params': {
+                    'mute': mute
+                }
+            })
+        }
+        function setInput(newInput) {
+            executeCommand({
+                'command': 'action.devices.commands.SetInput',
+                'params': {
+                    'newInput': newInput
+                }
+            })
+        }
+        function onOff(on) {
+            executeCommand({
+                'command': 'action.devices.commands.OnOff',
+                'params': {
+                    'on': on
+                }
+            })
         }
 
         document.onkeydown = function (e) {
@@ -51,20 +83,26 @@
 </head>
 
 <body>
-    <h1>abcb</h1>
-    <p>def</p>
+    <h1>TV Control</h1>
     <p>
         <button onclick="sendVol(-5)">-5</button>
         <button onclick="sendVol(-1)">-1</button>
         <button onclick="sendVol(1)">+1</button>
         <button onclick="sendVol(5)">+5</button>
     </p>
-    <p><button onclick="mute()">mute</button></p>
     <p>
-        <button onclick="sendVol(-5)">-5</button>
-        <button onclick="sendVol(-1)">-1</button>
-        <button onclick="sendVol(1)">+1</button>
-        <button onclick="sendVol(5)">+5</button>
+        <button onclick="mute(true)">mute</button>
+        <button onclick="mute(false)">unmute</button>
+    </p>
+    <p>
+        <button onclick="onOff(false)">off</button>
+        <button onclick="onOff(true)">on</button>
+    </p>
+    <p>
+        <button onclick="setInput('1')">hdmi1</button>
+        <button onclick="setInput('2')">hdmi2</button>
+        <button onclick="setInput('3')">hdmi3</button>
+        <button onclick="setInput('4')">hdmi4</button>
     </p>
 </body>
 
