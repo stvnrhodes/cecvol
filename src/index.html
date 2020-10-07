@@ -37,6 +37,16 @@
                 .then(response => response.json())
                 .then(data => console.log(data));
         }
+
+        document.onkeydown = function (e) {
+            e = e || window.event;
+            if (e.keyCode == '38') {
+                sendVol(1) // up key
+            }
+            else if (e.keyCode == '40') {
+                sendVol(-1) // down key
+            }
+        }
     </script>
 </head>
 
