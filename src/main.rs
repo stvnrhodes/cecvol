@@ -1,7 +1,14 @@
 use actix_http::Response;
 use actix_web::{get, middleware, post, web, App, HttpServer, Responder};
+use cec_rs::{
+    CecCommand, CecConnection, CecConnectionCfgBuilder, CecConnectionResultError, CecDeviceType,
+    CecDeviceTypeVec, CecKeypress,
+};
 use env_logger;
+use log::info;
 use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::sync::Mutex;
 
 #[derive(Deserialize)]
 struct AuthInfo {
@@ -361,7 +368,7 @@ struct ExecuteCommand {
     execution: Vec<Execution>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Device {
     id: String,
@@ -434,7 +441,10 @@ struct FulfillmentResponse {
 }
 
 #[post("/fulfillment")]
-async fn fulfillment(req: web::Json<FulfillmentRequest>) -> web::Json<FulfillmentResponse> {
+async fn fulfillment(
+    req: web::Json<FulfillmentRequest>,
+    cec: CECData,
+) -> Result<web::Json<FulfillmentResponse>, actix_web::Error> {
     let request_id = req.request_id.clone();
     for input in &req.inputs {
         match input {
@@ -447,10 +457,10 @@ async fn fulfillment(req: web::Json<FulfillmentRequest>) -> web::Json<Fulfillmen
                             Execution::SetVolume { volume_level } => println!("{}", volume_level),
                             Execution::VolumeRelative { relative_steps } => {
                                 println!("{}", relative_steps);
-                                // TODO: change volume
-                                // TODO: Add in device ids
+                                info!("changing volume of {:?} by {}", c.devices, relative_steps);
+                                cec.lock().unwrap().volume_change(*relative_steps)?;
                                 let result = CommandResults {
-                                    ids: vec![], // map in other ids?
+                                    ids: c.devices.iter().map(|d| d.id.clone()).collect(),
                                     status: CommandStatus::SUCCESS,
                                     error_code: CommandErrors::None,
                                     states: DeviceState {
@@ -459,22 +469,22 @@ async fn fulfillment(req: web::Json<FulfillmentRequest>) -> web::Json<Fulfillmen
                                         ..Default::default()
                                     },
                                 };
-                                return web::Json(FulfillmentResponse {
+                                return Ok(web::Json(FulfillmentResponse {
                                     request_id: request_id,
                                     payload: ResponsePayload::Execute(ExecuteResponsePayload {
                                         commands: vec![result],
                                         errors: None,
                                     }),
-                                });
+                                }));
                             }
                             _ => {
-                                return web::Json(FulfillmentResponse {
+                                return Ok(web::Json(FulfillmentResponse {
                                     request_id: request_id,
                                     payload: ResponsePayload::Error(ResponseErrors {
                                         error_code: ErrorCodes::NotSupported,
                                         debug_string: "unknown command".into(),
                                     }),
-                                })
+                                }))
                             }
                         }
                     }
@@ -484,103 +494,94 @@ async fn fulfillment(req: web::Json<FulfillmentRequest>) -> web::Json<Fulfillmen
         }
     }
 
-    web::Json(FulfillmentResponse {
+    Ok(web::Json(FulfillmentResponse {
         request_id: request_id,
         payload: ResponsePayload::Error(ResponseErrors {
             error_code: ErrorCodes::NotSupported,
             debug_string: "no inputs provided".into(),
         }),
-    })
+    }))
 }
 
+#[derive(Debug)]
+struct CECError {
+    err: CecConnectionResultError,
+}
+impl actix_http::ResponseError for CECError {}
+impl fmt::Display for CECError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.err)
+    }
+}
+impl From<CecConnectionResultError> for CECError {
+    fn from(err: CecConnectionResultError) -> CECError {
+        CECError { err: err }
+    }
+}
+
+struct CEC {
+    conn: CecConnection,
+}
+
+type CECData = web::Data<Mutex<CEC>>;
+impl CEC {
+    fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
+        if relative_steps > 0 {
+            for _ in 0..relative_steps {
+                self.conn.volume_up(true)?;
+            }
+        } else if relative_steps < 0 {
+            for _ in relative_steps..0 {
+                self.conn.volume_down(true)?;
+            }
+        }
+        Ok(())
+    }
+}
+unsafe impl Send for CEC {}
+
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    // let cecActor = CECActor::start();
+async fn main() -> anyhow::Result<()> {
     env_logger::init();
-    HttpServer::new(|| {
+
+    let cfg = CecConnectionCfgBuilder::default()
+        .port("RPI".into())
+        .device_name("Pi".into())
+        .activate_source(false) /* Don't auto-turn on the TV */
+        .device_types(CecDeviceTypeVec::new(CecDeviceType::RecordingDevice))
+        .key_press_callback(Box::new(on_key_press))
+        .command_received_callback(Box::new(on_command_received))
+        .build()
+        .unwrap();
+    let conn = web::Data::new(Mutex::new(CEC {
+        conn: cfg.open().unwrap(),
+    }));
+
+    HttpServer::new(move || {
         App::new()
-            // .app_data(cecActor)
+            .app_data(conn.clone())
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
             .service(fulfillment)
             .service(auth)
             .route("/", web::get().to(index))
-        // .route("/{name}", web::get().to(greet))
     })
     .bind("0.0.0.0:8080")?
     .run()
-    .await
+    .await?;
+    Ok(())
 }
 
-// todo
-// read vol
-// need to read up on google home graph
-// allow mute
-// for now, curl to test out each?
-//https://developers.google.com/assistant/`/develop/create#setup-server
-// use anyhow::Result;
-// use cec_rs::{CecCommand, CecConnectionCfgBuilder, CecDeviceType, CecDeviceTypeVec, CecKeypress};
-// use std::io::{stdin, stdout, Write};
-// use termion::event::Key;
-// use termion::input::TermRead;
-// use termion::raw::IntoRawMode;
+fn on_key_press(keypress: CecKeypress) {
+    info!(
+        "onKeyPress: {:?}, keycode: {:?}, duration: {:?}",
+        keypress, keypress.keycode, keypress.duration
+    );
+}
 
-// fn main() -> Result<()> {
-//     // Set up terminal to accept keypresses
-//     let stdin = stdin();
-//     let mut stdout = stdout().into_raw_mode()?;
-//     stdout.flush()?;
-
-//     let cfg = CecConnectionCfgBuilder::default()
-//         .port("RPI".into())
-//         .device_name("Pi".into())
-//         .activate_source(false) /* Don't auto-turn on the TV */
-//         .device_types(CecDeviceTypeVec::new(CecDeviceType::RecordingDevice))
-//         .key_press_callback(Box::new(on_key_press))
-//         .command_received_callback(Box::new(on_command_received))
-//         .build()
-//         .unwrap();
-//     let conn = cfg.open().unwrap();
-
-//     for c in stdin.keys() {
-//         print!("{}", termion::clear::CurrentLine);
-
-//         match c.unwrap() {
-//             Key::Char('q') => break,
-//             Key::Char('m') => {
-//                 conn.audio_toggle_mute().unwrap();
-//                 print!("m\r\n");
-//             }
-//             Key::Char(c) => {
-//                 print!("{}\r\n", c);
-//             }
-//             Key::Up => {
-//                 print!("u");
-//                 conn.volume_up(true).unwrap();
-//                 print!("p\r\n");
-//             }
-//             Key::Down => {
-//                 print!("d");
-//                 conn.volume_down(true).unwrap();
-//                 print!("own\r\n");
-//             }
-//             _ => {}
-//         };
-//     }
-
-//     Ok(())
-// }
-
-// fn on_key_press(keypress: CecKeypress) {
-//     println!(
-//         "onKeyPress: {:?}, keycode: {:?}, duration: {:?}",
-//         keypress, keypress.keycode, keypress.duration
-//     );
-// }
-
-// fn on_command_received(command: CecCommand) {
-//     println!(
-//         "onCommandReceived:  opcode: {:?}, initiator: {:?}",
-//         command.opcode, command.initiator
-//     );
-// }
+fn on_command_received(command: CecCommand) {
+    info!(
+        "onCommandReceived:  opcode: {:?}, initiator: {:?}",
+        command.opcode, command.initiator
+    );
+}

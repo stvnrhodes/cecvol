@@ -508,6 +508,7 @@ dependencies = [
  "anyhow",
  "cec-rs",
  "env_logger",
+ "log",
  "serde",
  "termion",
 ]
