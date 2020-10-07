@@ -4,7 +4,7 @@ use cec_rs::{
     CecCommand, CecConnection, CecConnectionCfgBuilder, CecConnectionResultError, CecDeviceType,
     CecDeviceTypeVec, CecKeypress,
 };
-use env_logger;
+use env_logger::Env;
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -542,7 +542,7 @@ unsafe impl Send for CEC {}
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    env_logger::from_env(Env::default().default_filter_or("debug")).init();
 
     let cfg = CecConnectionCfgBuilder::default()
         .port("RPI".into())
