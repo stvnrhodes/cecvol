@@ -9,7 +9,6 @@ use action::devices::{
 use actix_http::Response;
 use actix_web::{get, middleware, post, web, App, HttpServer, Responder};
 use cec_rs::{CecCommand, CecConnectionCfgBuilder, CecDeviceType, CecDeviceTypeVec, CecKeypress};
-use env_logger::Env;
 use log::{debug, info};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -154,7 +153,9 @@ async fn fulfillment(
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
-    env_logger::from_env(Env::default().default_filter_or("debug")).init();
+    env_logger::from_env(env_logger::Env::default().default_filter_or("debug"))
+        .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
+        .init();
 
     debug!("Creating CEC connection...");
     let cfg = CecConnectionCfgBuilder::default()
