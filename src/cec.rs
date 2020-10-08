@@ -204,11 +204,13 @@ impl CEC {
     pub fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
         if relative_steps > 0 {
             for _ in 0..relative_steps {
-                self.press_key(CecUserControlCode::VolumeUp)?
+                self.conn.volume_up(true)?
+                // self.press_key(CecUserControlCode::VolumeUp)?
             }
         } else if relative_steps < 0 {
             for _ in relative_steps..0 {
-                self.press_key(CecUserControlCode::VolumeDown)?
+                self.conn.volume_down(true)?
+                // self.press_key(CecUserControlCode::VolumeDown)?
             }
         }
         Ok(())
