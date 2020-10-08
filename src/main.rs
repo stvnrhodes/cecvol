@@ -3,8 +3,8 @@ mod cec;
 
 use action::devices::{
     CommandErrors, CommandResults, CommandStatus, DeviceState, ErrorCodes, ExecuteResponsePayload,
-    Execution, FulfillmentRequest, FulfillmentResponse, RequestPayload, ResponseErrors,
-    ResponsePayload,
+    Execution, FulfillmentRequest, FulfillmentResponse, QueryResponsePayload, RequestPayload,
+    ResponseErrors, ResponsePayload, SyncResponsePayload,
 };
 use actix_http::Response;
 use actix_web::{get, middleware, post, web, App, HttpServer, Responder};
@@ -12,6 +12,7 @@ use cec_rs::{CecCommand, CecConnectionCfgBuilder, CecDeviceType, CecDeviceTypeVe
 use env_logger::Env;
 use log::{debug, info};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 #[derive(Deserialize)]
@@ -48,15 +49,33 @@ async fn fulfillment(
     let request_id = req.request_id.clone();
     for input in &req.inputs {
         match input {
-            RequestPayload::Sync => println!("Sync"),
-            RequestPayload::Query { devices: _ } => println!("Query"),
+            RequestPayload::Sync => {
+                return Ok(web::Json(FulfillmentResponse {
+                    request_id: request_id,
+                    payload: ResponsePayload::Sync(SyncResponsePayload {
+                        // TODO(stvn): Switch to oauth identity
+                        agent_user_id: "cecvol-stvn-user".into(),
+                        // TODO(stvn): Add devices
+                        devices: vec![],
+                        errors: None,
+                    }),
+                }));
+            }
+            RequestPayload::Query { devices: _ } => {
+                return Ok(web::Json(FulfillmentResponse {
+                    request_id: request_id,
+                    payload: ResponsePayload::Query(QueryResponsePayload {
+                        devices: HashMap::new(),
+                        errors: None,
+                    }),
+                }));
+            }
             RequestPayload::Execute { commands } => {
                 for c in commands {
                     for e in &c.execution {
                         match e {
                             Execution::SetVolume { volume_level } => println!("{}", volume_level),
                             Execution::VolumeRelative { relative_steps } => {
-                                println!("{}", relative_steps);
                                 info!("changing volume of {:?} by {}", c.devices, relative_steps);
                                 cec.lock().unwrap().volume_change(*relative_steps)?;
                                 let result = CommandResults {
@@ -73,6 +92,36 @@ async fn fulfillment(
                                     request_id: request_id,
                                     payload: ResponsePayload::Execute(ExecuteResponsePayload {
                                         commands: vec![result],
+                                        errors: None,
+                                    }),
+                                }));
+                            }
+                            Execution::Mute { mute } => {
+                                cec.lock().unwrap().mute(*mute)?;
+                                return Ok(web::Json(FulfillmentResponse {
+                                    request_id: request_id,
+                                    payload: ResponsePayload::Execute(ExecuteResponsePayload {
+                                        commands: vec![],
+                                        errors: None,
+                                    }),
+                                }));
+                            }
+                            Execution::OnOff { on } => {
+                                cec.lock().unwrap().on_off(*on)?;
+                                return Ok(web::Json(FulfillmentResponse {
+                                    request_id: request_id,
+                                    payload: ResponsePayload::Execute(ExecuteResponsePayload {
+                                        commands: vec![],
+                                        errors: None,
+                                    }),
+                                }));
+                            }
+                            Execution::SetInput { new_input } => {
+                                cec.lock().unwrap().set_input(new_input.clone())?;
+                                return Ok(web::Json(FulfillmentResponse {
+                                    request_id: request_id,
+                                    payload: ResponsePayload::Execute(ExecuteResponsePayload {
+                                        commands: vec![],
                                         errors: None,
                                     }),
                                 }));

@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize)]
 pub enum DeviceType {
@@ -23,7 +24,7 @@ pub enum DeviceTrait {
     #[serde(rename = "action.devices.traits.MediaState")]
     MediaState,
     // The basic on and off functionality for any device that has binary on and
-    //  off, including plugs and switches as well as many future devices.
+    //  off, including plugs and switches as well as many fuature devices.
     #[serde(rename = "action.devices.traits.OnOff")]
     OnOff,
     // This trait belongs to any devices with settings that can only exist in
@@ -74,35 +75,35 @@ pub struct DeviceInfo {
     sw_version: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DeviceWithAttributes {
+pub struct Device {
     // The ID of the device in the developer's cloud. This must be unique for
     // the user and for the developer, as in cases of sharing we may use this
     // to dedupe multiple views of the same device. It should be immutable for
     // the device; if it changes, the Assistant will treat it as a new device.
-    id: String,
+    pub id: String,
     // The hardware type of device.
     #[serde(rename = "type")]
-    device_type: DeviceType,
+    pub device_type: DeviceType,
     // List of traits this device has. This defines the commands, attributes,
     // and states that the device supports.
-    traits: Vec<DeviceTrait>,
+    pub traits: Vec<DeviceTrait>,
     // Names of this device.
-    name: DeviceNames,
+    pub name: DeviceNames,
     // Indicates whether this device will have its states updated by the Real
     // Time Feed. (true to use the Real Time Feed for reporting state, and
     // false to use the polling model.)
-    will_report_state: bool,
+    pub will_report_state: bool,
     // Provides the current room of the device in the user's home to simplify setup.
     #[serde(skip_serializing_if = "Option::is_none")]
-    room_hint: Option<String>,
+    pub room_hint: Option<String>,
     // Contains fields describing the device for use in one-off logic if needed
     // (e.g. 'broken firmware version X of light Y requires adjusting color',
     // or 'security flaw requires notifying all users of firmware Z').
     #[serde(skip_serializing_if = "Option::is_none")]
-    device_info: Option<DeviceInfo>,
-    attributes: DeviceAttributes,
+    pub device_info: Option<DeviceInfo>,
+    pub attributes: DeviceAttributes,
     // Not present due to not yet being needed:
     // custom_data
     // other_device_ids
@@ -132,6 +133,7 @@ pub struct ResponseErrors {
 pub enum ResponsePayload {
     Error(ResponseErrors),
     Sync(SyncResponsePayload),
+    Query(QueryResponsePayload),
     Execute(ExecuteResponsePayload),
 }
 
@@ -142,12 +144,20 @@ pub struct SyncResponsePayload {
     // string is opaque to Google, so if there's an immutable form vs a mutable
     // form on the agent side, use the immutable form (e.g. an account number
     // rather than email).
-    agent_user_id: String,
+    pub agent_user_id: String,
     // Devices associated with the third-party user.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    devices: Vec<DeviceWithAttributes>,
+    pub devices: Vec<Device>,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    errors: Option<ResponseErrors>,
+    pub errors: Option<ResponseErrors>,
+}
+
+#[derive(Serialize)]
+pub struct QueryResponsePayload {
+    // Map of devices. Maps developer device ID to object of state properties.
+    pub devices: HashMap<String, DeviceAttributes>,
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub errors: Option<ResponseErrors>,
 }
 
 #[derive(Serialize, Deserialize)]

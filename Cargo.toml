@@ -11,6 +11,7 @@ actix-http="2.0"
 anyhow = "1.0"
 log = "0.4"
 cec-rs = "2.0"
+libcec-sys = "*"
 serde = { version = "1.0", features = ["derive"] } 
 env_logger = "0.7"
 termion = "1.5"
