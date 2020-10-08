@@ -224,7 +224,11 @@ impl CEC {
         Ok(())
     }
     pub fn on_off(&self, on: bool) -> Result<(), CECError> {
-        self.conn.audio_get_status()?;
+        if on {
+            self.conn.audio_get_status()?;
+        } else {
+            self.conn.audio_toggle_mute()?;
+        }
         Ok(())
         // if on {
         //     self.transmit(CecLogicalAddress::Tv, CECOpcode::ImageViewOn)
