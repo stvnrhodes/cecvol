@@ -225,16 +225,10 @@ impl CEC {
     }
     pub fn on_off(&self, on: bool) -> Result<(), CECError> {
         if on {
-            self.conn.audio_get_status()?;
+            self.transmit(CecLogicalAddress::Tv, CECOpcode::ImageViewOn)
         } else {
-            self.conn.audio_toggle_mute()?;
+            self.transmit(CecLogicalAddress::Tv, CECOpcode::Standby)
         }
-        Ok(())
-        // if on {
-        //     self.transmit(CecLogicalAddress::Tv, CECOpcode::ImageViewOn)
-        // } else {
-        //     self.transmit(CecLogicalAddress::Tv, CECOpcode::Standby)
-        // }
     }
     pub fn set_input(&self, new_input: String) -> Result<(), CECError> {
         // TODO(stvn): Fix this assumption!
