@@ -1,3 +1,6 @@
+pub mod vchi;
+pub mod vchiq_ioctl;
+
 use cec_rs::{CecConnection, CecConnectionResultError, CecLogicalAddress, CecUserControlCode};
 use log::debug;
 use std::cmp;
@@ -28,7 +31,6 @@ type CECPhysicalAddress = [u8; 4];
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug)]
-#[allow(dead_code)]
 enum PowerStatus {
     On = libcec_sys::CEC_POWER_STATUS_ON,
     Standby = libcec_sys::CEC_POWER_STATUS_STANDBY,
@@ -37,7 +39,6 @@ enum PowerStatus {
     Unknown = libcec_sys::CEC_POWER_STATUS_UNKNOWN,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 enum CECOpcode {
     None,

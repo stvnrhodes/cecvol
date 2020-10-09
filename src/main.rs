@@ -158,6 +158,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     debug!("Creating CEC connection...");
+    cec::vchi::HardwareInterface::init()?;
     let cfg = CecConnectionCfgBuilder::default()
         .port("RPI".into())
         .device_name("Pi".into())
