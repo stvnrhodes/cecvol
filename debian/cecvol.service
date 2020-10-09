@@ -3,7 +3,8 @@ Description=Allow external control of CEC commands to TV
 After=network.target graphical.target
 
 [Service]
-User=pi
+DynamicUser=yes
+SupplementaryGroups=video
 Restart=on-failure
 ExecStart=/usr/bin/cecvol
 
