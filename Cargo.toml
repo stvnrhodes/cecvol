@@ -20,6 +20,5 @@ env_logger = "0.7"
 termion = "1.5"
 
 [package.metadata.deb]
-depends = "$auto,libcec"
 maintainer-scripts = "debian/"
 systemd-units = { }
