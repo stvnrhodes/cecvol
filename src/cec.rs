@@ -1,7 +1,9 @@
+pub mod enums;
 pub mod vchi;
 pub mod vchiq_ioctl;
 
-use cec_rs::{CecConnection, CecConnectionResultError, CecLogicalAddress, CecUserControlCode};
+use cec_rs::{CecConnection, CecConnectionResultError};
+use enums::{LogicalAddress, Opcode, PowerStatus, UserControl};
 use log::debug;
 use std::cmp;
 use std::fmt;
@@ -22,22 +24,7 @@ impl From<CecConnectionResultError> for CECError {
     }
 }
 
-const EMPTY_DATAPACKET: libcec_sys::cec_datapacket = libcec_sys::cec_datapacket {
-    data: [0; 64],
-    size: 0,
-};
-
 type CECPhysicalAddress = [u8; 4];
-
-#[repr(u32)]
-#[derive(Copy, Clone, Debug)]
-enum PowerStatus {
-    On = libcec_sys::CEC_POWER_STATUS_ON,
-    Standby = libcec_sys::CEC_POWER_STATUS_STANDBY,
-    InTransitionStandbyToOn = libcec_sys::CEC_POWER_STATUS_IN_TRANSITION_STANDBY_TO_ON,
-    InTransitionOnToStandby = libcec_sys::CEC_POWER_STATUS_IN_TRANSITION_ON_TO_STANDBY,
-    Unknown = libcec_sys::CEC_POWER_STATUS_UNKNOWN,
-}
 
 #[derive(Debug)]
 enum CECOpcode {
@@ -50,7 +37,7 @@ enum CECOpcode {
     GivePhysicalAddress,
     ReportPhysicalAddress {
         physical_address: CECPhysicalAddress,
-        device_type: CecLogicalAddress,
+        device_type: LogicalAddress,
     },
     GiveOSDName,
     SetOSDName {
@@ -61,88 +48,62 @@ enum CECOpcode {
         power_status: PowerStatus,
     },
     UserControlPressed {
-        user_control_code: CecUserControlCode,
+        user_control_code: UserControl,
     },
-    UserControlRelease,
+    UserControlReleased,
 }
 
 impl CECOpcode {
-    fn get_opcode(&self) -> libcec_sys::cec_opcode {
+    fn get_opcode(&self) -> Opcode {
         match &self {
-            CECOpcode::None => 0,
-            CECOpcode::ImageViewOn => libcec_sys::CEC_OPCODE_IMAGE_VIEW_ON,
-            CECOpcode::Standby => libcec_sys::CEC_OPCODE_STANDBY,
-            CECOpcode::ActiveSource { .. } => libcec_sys::CEC_OPCODE_ACTIVE_SOURCE,
-            CECOpcode::GivePhysicalAddress => libcec_sys::CEC_OPCODE_GIVE_PHYSICAL_ADDRESS,
-            CECOpcode::ReportPhysicalAddress { .. } => {
-                libcec_sys::CEC_OPCODE_REPORT_PHYSICAL_ADDRESS
-            }
-            CECOpcode::GiveOSDName => libcec_sys::CEC_OPCODE_GIVE_OSD_NAME,
-            CECOpcode::SetOSDName { .. } => libcec_sys::CEC_OPCODE_SET_OSD_NAME,
-            CECOpcode::GiveDevicePowerStatus => libcec_sys::CEC_OPCODE_GIVE_DEVICE_POWER_STATUS,
-            CECOpcode::ReportPowerStatus { .. } => libcec_sys::CEC_OPCODE_REPORT_POWER_STATUS,
-            CECOpcode::UserControlPressed { .. } => libcec_sys::CEC_OPCODE_USER_CONTROL_PRESSED,
-            CECOpcode::UserControlRelease => libcec_sys::CEC_OPCODE_USER_CONTROL_RELEASE,
+            CECOpcode::None => Opcode::FeatureAbort,
+            CECOpcode::ImageViewOn => Opcode::ImageViewOn,
+            CECOpcode::Standby => Opcode::Standby,
+            CECOpcode::ActiveSource { .. } => Opcode::ActiveSource,
+            CECOpcode::GivePhysicalAddress => Opcode::GivePhysicalAddress,
+            CECOpcode::ReportPhysicalAddress { .. } => Opcode::ReportPhysicalAddress,
+            CECOpcode::GiveOSDName => Opcode::GiveOSDName,
+            CECOpcode::SetOSDName { .. } => Opcode::SetOSDName,
+            CECOpcode::GiveDevicePowerStatus => Opcode::GiveDevicePowerStatus,
+            CECOpcode::ReportPowerStatus { .. } => Opcode::ReportPowerStatus,
+            CECOpcode::UserControlPressed { .. } => Opcode::UserControlPressed,
+            CECOpcode::UserControlReleased => Opcode::UserControlReleased,
         }
     }
-    fn get_parameters(&self) -> libcec_sys::cec_datapacket {
+    fn get_parameters(&self) -> Vec<u8> {
         match &self {
-            CECOpcode::ActiveSource { physical_address } => {
-                let mut data: [u8; 64] = [0; 64];
-                for (from, to) in physical_address.iter().zip(data.iter_mut()) {
-                    *to = *from;
-                }
-                libcec_sys::cec_datapacket { data, size: 4 }
-            }
+            CECOpcode::ActiveSource { physical_address } => physical_address.to_vec(),
             CECOpcode::ReportPhysicalAddress {
                 physical_address,
                 device_type,
             } => {
-                let mut data: [u8; 64] = [0; 64];
-                for (from, to) in physical_address.iter().zip(data.iter_mut()) {
-                    *to = *from;
-                }
-                data[4] = *device_type as u8;
-                libcec_sys::cec_datapacket { data, size: 5 }
+                let mut params: Vec<u8> = physical_address.to_vec();
+                params.push(*device_type as u8);
+                params
             }
-            CECOpcode::SetOSDName { name } => {
-                let mut data: [u8; 64] = [0; 64];
-                for (from, to) in name.as_bytes().iter().zip(data.iter_mut()) {
-                    *to = *from;
-                }
-                libcec_sys::cec_datapacket {
-                    data,
-                    size: cmp::min(name.len(), 64) as u8,
-                }
-            }
+            CECOpcode::SetOSDName { name } => name.as_bytes().to_vec(),
             CECOpcode::ReportPowerStatus { power_status } => {
                 let code = *power_status as u32;
-                let mut data: [u8; 64] = [0; 64];
-                data[0] = ((code >> 8) & 0xf) as u8;
-                data[1] = ((code >> 0) & 0xf) as u8;
-                libcec_sys::cec_datapacket { data, size: 2 }
+                vec![((code >> 8) & 0xf) as u8, ((code >> 0) & 0xf) as u8]
             }
             CECOpcode::UserControlPressed { user_control_code } => {
                 let code = *user_control_code as u32;
-                let mut data: [u8; 64] = [0; 64];
-                data[0] = ((code >> 8) & 0xf) as u8;
-                data[1] = ((code >> 0) & 0xf) as u8;
-                libcec_sys::cec_datapacket { data, size: 2 }
+                vec![((code >> 8) & 0xf) as u8, ((code >> 0) & 0xf) as u8]
             }
             CECOpcode::None
             | CECOpcode::ImageViewOn
             | CECOpcode::Standby
             | CECOpcode::GivePhysicalAddress
             | CECOpcode::GiveOSDName
-            | CECOpcode::UserControlRelease
-            | CECOpcode::GiveDevicePowerStatus => EMPTY_DATAPACKET,
+            | CECOpcode::UserControlReleased
+            | CECOpcode::GiveDevicePowerStatus => vec![],
         }
     }
 }
 
 struct CECCommand {
-    initiator: CecLogicalAddress,
-    destination: CecLogicalAddress,
+    initiator: LogicalAddress,
+    destination: LogicalAddress,
     opcode: CECOpcode,
 }
 
@@ -152,14 +113,22 @@ impl Into<libcec_sys::cec_command> for CECCommand {
             CECOpcode::None => 0,
             _ => 1,
         };
+        let params = self.opcode.get_parameters();
+        let mut data: [u8; 64] = [0; 64];
+        for (from, to) in params.iter().zip(data.iter_mut()) {
+            *to = *from;
+        }
         libcec_sys::cec_command {
             initiator: self.initiator as libcec_sys::cec_logical_address,
             destination: self.destination as libcec_sys::cec_logical_address,
             ack: 0,
             eom: 0,
             opcode_set: opcode_set,
-            opcode: self.opcode.get_opcode(),
-            parameters: self.opcode.get_parameters(),
+            opcode: self.opcode.get_opcode() as u32,
+            parameters: libcec_sys::cec_datapacket {
+                data: data,
+                size: cmp::min(params.len(), 64) as u8,
+            },
             transmit_timeout: 1000,
         }
     }
@@ -174,12 +143,12 @@ impl CEC {
         CEC { conn }
     }
 
-    fn transmit(&self, destination: CecLogicalAddress, opcode: CECOpcode) -> Result<(), CECError> {
+    fn transmit(&self, destination: LogicalAddress, opcode: CECOpcode) -> Result<(), CECError> {
         debug!("sending {:?} to {:?}", opcode, destination);
         self.conn.transmit(
             CECCommand {
                 // TODO(stvn): Don't do this implicitly
-                initiator: CecLogicalAddress::Recordingdevice1,
+                initiator: LogicalAddress::RecordingDevice1,
                 destination: destination,
                 opcode: opcode,
             }
@@ -189,29 +158,29 @@ impl CEC {
     }
 
     fn broadcast(&self, code: CECOpcode) -> Result<(), CECError> {
-        self.transmit(CecLogicalAddress::Unregistered, code)
+        self.transmit(LogicalAddress::Broadcast, code)
     }
 
-    fn press_key(&self, code: CecUserControlCode) -> Result<(), CECError> {
+    fn press_key(&self, code: UserControl) -> Result<(), CECError> {
         self.transmit(
-            CecLogicalAddress::Tv,
+            LogicalAddress::TV,
             CECOpcode::UserControlPressed {
                 user_control_code: code,
             },
         )?;
-        self.transmit(CecLogicalAddress::Tv, CECOpcode::UserControlRelease)
+        self.transmit(LogicalAddress::TV, CECOpcode::UserControlReleased)
     }
 
     pub fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
         if relative_steps > 0 {
             for _ in 0..relative_steps {
                 self.conn.volume_up(true)?
-                // self.press_key(CecUserControlCode::VolumeUp)?
+                // self.press_key(UserControl::VolumeUp)?
             }
         } else if relative_steps < 0 {
             for _ in relative_steps..0 {
                 self.conn.volume_down(true)?
-                // self.press_key(CecUserControlCode::VolumeDown)?
+                // self.press_key(UserControl::VolumeDown)?
             }
         }
         Ok(())
@@ -226,9 +195,9 @@ impl CEC {
     }
     pub fn on_off(&self, on: bool) -> Result<(), CECError> {
         if on {
-            self.transmit(CecLogicalAddress::Tv, CECOpcode::ImageViewOn)
+            self.transmit(LogicalAddress::TV, CECOpcode::ImageViewOn)
         } else {
-            self.transmit(CecLogicalAddress::Tv, CECOpcode::Standby)
+            self.transmit(LogicalAddress::TV, CECOpcode::Standby)
         }
     }
     pub fn set_input(&self, new_input: String) -> Result<(), CECError> {
@@ -243,14 +212,14 @@ impl CEC {
         };
         self.broadcast(CECOpcode::ReportPhysicalAddress {
             physical_address: new_addr,
-            device_type: CecLogicalAddress::Recordingdevice1,
+            device_type: LogicalAddress::RecordingDevice1,
         })?;
         self.broadcast(CECOpcode::ActiveSource {
             physical_address: new_addr,
         })?;
         self.broadcast(CECOpcode::ReportPhysicalAddress {
             physical_address: old_addr,
-            device_type: CecLogicalAddress::Recordingdevice1,
+            device_type: LogicalAddress::RecordingDevice1,
         })
     }
 }

@@ -159,30 +159,30 @@ async fn main() -> anyhow::Result<()> {
 
     debug!("Creating CEC connection...");
     cec::vchi::HardwareInterface::init()?;
-    let cfg = CecConnectionCfgBuilder::default()
-        .port("RPI".into())
-        .device_name("Pi".into())
-        .activate_source(false) /* Don't auto-turn on the TV */
-        .device_types(CecDeviceTypeVec::new(CecDeviceType::RecordingDevice))
-        .key_press_callback(Box::new(on_key_press))
-        .command_received_callback(Box::new(on_command_received))
-        .build()
-        .unwrap();
-    let conn = web::Data::new(Mutex::new(cec::CEC::new(cfg.open().unwrap())));
+    // let cfg = CecConnectionCfgBuilder::default()
+    //     .port("RPI".into())
+    //     .device_name("Pi".into())
+    //     .activate_source(false) /* Don't auto-turn on the TV */
+    //     .device_types(CecDeviceTypeVec::new(CecDeviceType::RecordingDevice))
+    //     .key_press_callback(Box::new(on_key_press))
+    //     .command_received_callback(Box::new(on_command_received))
+    //     .build()
+    //     .unwrap();
+    // let conn = web::Data::new(Mutex::new(cec::CEC::new(cfg.open().unwrap())));
 
-    debug!("Starting server...");
-    HttpServer::new(move || {
-        App::new()
-            .app_data(conn.clone())
-            .wrap(middleware::Logger::default())
-            .wrap(middleware::Compress::default())
-            .service(fulfillment)
-            .service(auth)
-            .route("/", web::get().to(index))
-    })
-    .bind("0.0.0.0:8080")?
-    .run()
-    .await?;
+    // debug!("Starting server...");
+    // HttpServer::new(move || {
+    //     App::new()
+    //         .app_data(conn.clone())
+    //         .wrap(middleware::Logger::default())
+    //         .wrap(middleware::Compress::default())
+    //         .service(fulfillment)
+    //         .service(auth)
+    //         .route("/", web::get().to(index))
+    // })
+    // .bind("0.0.0.0:8080")?
+    // .run()
+    // .await?;
     Ok(())
 }
 
