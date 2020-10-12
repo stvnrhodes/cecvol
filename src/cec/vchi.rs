@@ -14,6 +14,7 @@ use lazy_static::lazy_static;
 use log::{debug, info, warn};
 use nix::errno::Errno;
 use num_enum::TryFromPrimitive;
+use std::backtrace::Backtrace;
 use std::convert::TryFrom;
 use std::fs::File;
 use std::mem::{size_of, zeroed};
@@ -199,9 +200,17 @@ pub enum CreationError {
     #[error("VHCIQ was already initialized")]
     AlreadyInitialized,
     #[error("Could not open vchiq device")]
-    IOError(#[from] std::io::Error),
+    IOError {
+        #[from]
+        source: std::io::Error,
+        backtrace: Backtrace,
+    },
     #[error("ioctl call failed")]
-    IoctlError(#[from] nix::Error),
+    IoctlError {
+        #[from]
+        source: nix::Error,
+        backtrace: Backtrace,
+    },
 }
 
 impl HardwareInterface {

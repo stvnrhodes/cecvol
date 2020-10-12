@@ -1,3 +1,4 @@
+#![feature(backtrace)]
 mod action;
 mod cec;
 
@@ -151,8 +152,9 @@ async fn fulfillment(
     }))
 }
 
-#[actix_web::main]
-async fn main() -> anyhow::Result<()> {
+// #[actix_web::main]
+// async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug"))
         .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
         .init();
