@@ -9,7 +9,6 @@ use action::devices::{
 };
 use actix_http::Response;
 use actix_web::{get, middleware, post, web, App, HttpServer, Responder};
-use cec_rs::{CecCommand, CecConnectionCfgBuilder, CecDeviceType, CecDeviceTypeVec, CecKeypress};
 use log::{debug, info};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -152,52 +151,28 @@ async fn fulfillment(
     }))
 }
 
-// #[actix_web::main]
-// async fn main() -> anyhow::Result<()> {
-fn main() -> anyhow::Result<()> {
+#[actix_web::main]
+async fn main() -> anyhow::Result<()> {
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug"))
         .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
         .init();
 
     debug!("Creating CEC connection...");
-    cec::vchi::HardwareInterface::init()?;
-    // let cfg = CecConnectionCfgBuilder::default()
-    //     .port("RPI".into())
-    //     .device_name("Pi".into())
-    //     .activate_source(false) /* Don't auto-turn on the TV */
-    //     .device_types(CecDeviceTypeVec::new(CecDeviceType::RecordingDevice))
-    //     .key_press_callback(Box::new(on_key_press))
-    //     .command_received_callback(Box::new(on_command_received))
-    //     .build()
-    //     .unwrap();
-    // let conn = web::Data::new(Mutex::new(cec::CEC::new(cfg.open().unwrap())));
+    let vchi = cec::vchi::HardwareInterface::init()?;
+    let conn = web::Data::new(Mutex::new(cec::CEC::new(Box::new(vchi))));
 
-    // debug!("Starting server...");
-    // HttpServer::new(move || {
-    //     App::new()
-    //         .app_data(conn.clone())
-    //         .wrap(middleware::Logger::default())
-    //         .wrap(middleware::Compress::default())
-    //         .service(fulfillment)
-    //         .service(auth)
-    //         .route("/", web::get().to(index))
-    // })
-    // .bind("0.0.0.0:8080")?
-    // .run()
-    // .await?;
+    debug!("Starting server...");
+    HttpServer::new(move || {
+        App::new()
+            .app_data(conn.clone())
+            .wrap(middleware::Logger::default())
+            .wrap(middleware::Compress::default())
+            .service(fulfillment)
+            .service(auth)
+            .route("/", web::get().to(index))
+    })
+    .bind("0.0.0.0:8080")?
+    .run()
+    .await?;
     Ok(())
-}
-
-fn on_key_press(keypress: CecKeypress) {
-    info!(
-        "onKeyPress: {:?}, keycode: {:?}, duration: {:?}",
-        keypress, keypress.keycode, keypress.duration
-    );
-}
-
-fn on_command_received(command: CecCommand) {
-    info!(
-        "onCommandReceived:  opcode: {:?}, initiator: {:?}",
-        command.opcode, command.initiator
-    );
 }

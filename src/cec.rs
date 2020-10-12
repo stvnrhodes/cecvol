@@ -2,32 +2,24 @@ pub mod enums;
 pub mod vchi;
 pub mod vchiq_ioctl;
 
-use cec_rs::{CecConnection, CecConnectionResultError};
 use enums::{LogicalAddress, Opcode, PowerStatus, UserControl};
 use log::debug;
 use std::cmp;
 use std::fmt;
 
 #[derive(Debug)]
-pub struct CECError {
-    err: CecConnectionResultError,
-}
+pub struct CECError {}
 impl actix_http::ResponseError for CECError {}
 impl fmt::Display for CECError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.err)
-    }
-}
-impl From<CecConnectionResultError> for CECError {
-    fn from(err: CecConnectionResultError) -> CECError {
-        CECError { err: err }
+        write!(f, "{:?}", self)
     }
 }
 
 type CECPhysicalAddress = [u8; 4];
 
 #[derive(Debug)]
-enum CECOpcode {
+enum CECMessage {
     None,
     ImageViewOn,
     Standby,
@@ -53,27 +45,27 @@ enum CECOpcode {
     UserControlReleased,
 }
 
-impl CECOpcode {
+impl CECMessage {
     fn get_opcode(&self) -> Opcode {
         match &self {
-            CECOpcode::None => Opcode::FeatureAbort,
-            CECOpcode::ImageViewOn => Opcode::ImageViewOn,
-            CECOpcode::Standby => Opcode::Standby,
-            CECOpcode::ActiveSource { .. } => Opcode::ActiveSource,
-            CECOpcode::GivePhysicalAddress => Opcode::GivePhysicalAddress,
-            CECOpcode::ReportPhysicalAddress { .. } => Opcode::ReportPhysicalAddress,
-            CECOpcode::GiveOSDName => Opcode::GiveOSDName,
-            CECOpcode::SetOSDName { .. } => Opcode::SetOSDName,
-            CECOpcode::GiveDevicePowerStatus => Opcode::GiveDevicePowerStatus,
-            CECOpcode::ReportPowerStatus { .. } => Opcode::ReportPowerStatus,
-            CECOpcode::UserControlPressed { .. } => Opcode::UserControlPressed,
-            CECOpcode::UserControlReleased => Opcode::UserControlReleased,
+            CECMessage::None => Opcode::FeatureAbort,
+            CECMessage::ImageViewOn => Opcode::ImageViewOn,
+            CECMessage::Standby => Opcode::Standby,
+            CECMessage::ActiveSource { .. } => Opcode::ActiveSource,
+            CECMessage::GivePhysicalAddress => Opcode::GivePhysicalAddress,
+            CECMessage::ReportPhysicalAddress { .. } => Opcode::ReportPhysicalAddress,
+            CECMessage::GiveOSDName => Opcode::GiveOSDName,
+            CECMessage::SetOSDName { .. } => Opcode::SetOSDName,
+            CECMessage::GiveDevicePowerStatus => Opcode::GiveDevicePowerStatus,
+            CECMessage::ReportPowerStatus { .. } => Opcode::ReportPowerStatus,
+            CECMessage::UserControlPressed { .. } => Opcode::UserControlPressed,
+            CECMessage::UserControlReleased => Opcode::UserControlReleased,
         }
     }
     fn get_parameters(&self) -> Vec<u8> {
         match &self {
-            CECOpcode::ActiveSource { physical_address } => physical_address.to_vec(),
-            CECOpcode::ReportPhysicalAddress {
+            CECMessage::ActiveSource { physical_address } => physical_address.to_vec(),
+            CECMessage::ReportPhysicalAddress {
                 physical_address,
                 device_type,
             } => {
@@ -81,22 +73,22 @@ impl CECOpcode {
                 params.push(*device_type as u8);
                 params
             }
-            CECOpcode::SetOSDName { name } => name.as_bytes().to_vec(),
-            CECOpcode::ReportPowerStatus { power_status } => {
+            CECMessage::SetOSDName { name } => name.as_bytes().to_vec(),
+            CECMessage::ReportPowerStatus { power_status } => {
                 let code = *power_status as u32;
                 vec![((code >> 8) & 0xf) as u8, ((code >> 0) & 0xf) as u8]
             }
-            CECOpcode::UserControlPressed { user_control_code } => {
+            CECMessage::UserControlPressed { user_control_code } => {
                 let code = *user_control_code as u32;
                 vec![((code >> 8) & 0xf) as u8, ((code >> 0) & 0xf) as u8]
             }
-            CECOpcode::None
-            | CECOpcode::ImageViewOn
-            | CECOpcode::Standby
-            | CECOpcode::GivePhysicalAddress
-            | CECOpcode::GiveOSDName
-            | CECOpcode::UserControlReleased
-            | CECOpcode::GiveDevicePowerStatus => vec![],
+            CECMessage::None
+            | CECMessage::ImageViewOn
+            | CECMessage::Standby
+            | CECMessage::GivePhysicalAddress
+            | CECMessage::GiveOSDName
+            | CECMessage::UserControlReleased
+            | CECMessage::GiveDevicePowerStatus => vec![],
         }
     }
 }
@@ -104,100 +96,74 @@ impl CECOpcode {
 struct CECCommand {
     initiator: LogicalAddress,
     destination: LogicalAddress,
-    opcode: CECOpcode,
+    message: CECMessage,
 }
 
-impl Into<libcec_sys::cec_command> for CECCommand {
-    fn into(self) -> libcec_sys::cec_command {
-        let opcode_set = match self.opcode {
-            CECOpcode::None => 0,
-            _ => 1,
-        };
-        let params = self.opcode.get_parameters();
-        let mut data: [u8; 64] = [0; 64];
-        for (from, to) in params.iter().zip(data.iter_mut()) {
-            *to = *from;
-        }
-        libcec_sys::cec_command {
-            initiator: self.initiator as libcec_sys::cec_logical_address,
-            destination: self.destination as libcec_sys::cec_logical_address,
-            ack: 0,
-            eom: 0,
-            opcode_set: opcode_set,
-            opcode: self.opcode.get_opcode() as u32,
-            parameters: libcec_sys::cec_datapacket {
-                data: data,
-                size: cmp::min(params.len(), 64) as u8,
-            },
-            transmit_timeout: 1000,
-        }
-    }
+pub trait CECConnection {
+    fn transmit(&self, cmd: CECCommand) -> Result<(), CECError>;
 }
 
 pub struct CEC {
-    conn: CecConnection,
+    conn: Box<dyn CECConnection>,
 }
 
 impl CEC {
-    pub fn new(conn: CecConnection) -> Self {
+    pub fn new(conn: Box<dyn CECConnection>) -> Self {
         CEC { conn }
     }
 
-    fn transmit(&self, destination: LogicalAddress, opcode: CECOpcode) -> Result<(), CECError> {
-        debug!("sending {:?} to {:?}", opcode, destination);
-        self.conn.transmit(
-            CECCommand {
-                // TODO(stvn): Don't do this implicitly
-                initiator: LogicalAddress::RecordingDevice1,
-                destination: destination,
-                opcode: opcode,
-            }
-            .into(),
-        )?;
+    fn transmit(&self, destination: LogicalAddress, message: CECMessage) -> Result<(), CECError> {
+        debug!("sending {:?} to {:?}", message, destination);
+        self.conn.transmit(CECCommand {
+            // TODO(stvn): Don't do this implicitly
+            initiator: LogicalAddress::RecordingDevice1,
+            destination: destination,
+            message: message,
+        })?;
         Ok(())
     }
 
-    fn broadcast(&self, code: CECOpcode) -> Result<(), CECError> {
+    fn broadcast(&self, code: CECMessage) -> Result<(), CECError> {
         self.transmit(LogicalAddress::Broadcast, code)
     }
 
     fn press_key(&self, code: UserControl) -> Result<(), CECError> {
         self.transmit(
             LogicalAddress::TV,
-            CECOpcode::UserControlPressed {
+            CECMessage::UserControlPressed {
                 user_control_code: code,
             },
         )?;
-        self.transmit(LogicalAddress::TV, CECOpcode::UserControlReleased)
+        self.transmit(LogicalAddress::TV, CECMessage::UserControlReleased)
     }
 
     pub fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
         if relative_steps > 0 {
             for _ in 0..relative_steps {
-                self.conn.volume_up(true)?
-                // self.press_key(UserControl::VolumeUp)?
+                // self.conn.volume_up(true)?
+                self.press_key(UserControl::VolumeUp)?
             }
         } else if relative_steps < 0 {
             for _ in relative_steps..0 {
-                self.conn.volume_down(true)?
-                // self.press_key(UserControl::VolumeDown)?
+                // self.conn.volume_down(true)?
+                self.press_key(UserControl::VolumeDown)?
             }
         }
         Ok(())
     }
     pub fn mute(&self, mute: bool) -> Result<(), CECError> {
         if mute {
-            self.conn.audio_mute()?;
+            // self.conn.audio_mute()?;
         } else {
-            self.conn.audio_unmute()?;
+            // self.conn.audio_unmute()?;
         }
         Ok(())
     }
     pub fn on_off(&self, on: bool) -> Result<(), CECError> {
         if on {
-            self.transmit(LogicalAddress::TV, CECOpcode::ImageViewOn)
+            self.transmit(LogicalAddress::TV, CECMessage::ImageViewOn)
         } else {
-            self.transmit(LogicalAddress::TV, CECOpcode::Standby)
+            self.transmit(LogicalAddress::TV, CECMessage::Standby)
         }
     }
     pub fn set_input(&self, new_input: String) -> Result<(), CECError> {
@@ -210,14 +176,14 @@ impl CEC {
             "hdmi4" => [0, 0, 0, 4],
             _ => [0, 0, 0, 0],
         };
-        self.broadcast(CECOpcode::ReportPhysicalAddress {
+        self.broadcast(CECMessage::ReportPhysicalAddress {
             physical_address: new_addr,
             device_type: LogicalAddress::RecordingDevice1,
         })?;
-        self.broadcast(CECOpcode::ActiveSource {
+        self.broadcast(CECMessage::ActiveSource {
             physical_address: new_addr,
         })?;
-        self.broadcast(CECOpcode::ReportPhysicalAddress {
+        self.broadcast(CECMessage::ReportPhysicalAddress {
             physical_address: old_addr,
             device_type: LogicalAddress::RecordingDevice1,
         })

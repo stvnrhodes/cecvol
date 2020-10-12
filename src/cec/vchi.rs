@@ -8,6 +8,7 @@
 use crate::cec::enums::LogicalAddress;
 use crate::cec::vchiq_ioctl;
 use crate::cec::vchiq_ioctl::{ServiceHandle, VersionNum};
+use crate::cec::{CECCommand, CECConnection, CECError};
 use array_init::array_init;
 use core::ffi::c_void;
 use lazy_static::lazy_static;
@@ -531,5 +532,10 @@ impl HardwareInterface {
         // }
         //handle vector
         // Remove all services
+    }
+}
+impl CECConnection for HardwareInterface {
+    fn transmit(&self, cmd: CECCommand) -> Result<(), CECError> {
+        Ok(())
     }
 }
