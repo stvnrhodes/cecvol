@@ -5,28 +5,26 @@
 // https://github.com/raspberrypi/userland/blob/master/interface/vchiq_arm/vchiq_lib.c
 // https://github.com/raspberrypi/userland/blob/master/interface/vmcs_host/vc_vchi_cecservice.c
 
-use crate::cec::enums::LogicalAddress;
 use crate::cec::vchiq_ioctl;
 use crate::cec::vchiq_ioctl::{ServiceHandle, VersionNum};
-use crate::cec::{CECCommand, CECConnection, CECError};
+use crate::cec::{CECCommand, CECConnection, CECError, CECMessage, LogicalAddress};
 use array_init::array_init;
 use core::ffi::c_void;
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
 use nix::errno::Errno;
 use num_enum::TryFromPrimitive;
-use std::backtrace::Backtrace;
 use std::convert::TryFrom;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::mem::{size_of, zeroed};
 use std::os::raw::c_int;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::io::{AsRawFd, RawFd};
+use std::ptr;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use thiserror::Error;
 
 const DEV_VCHIQ: &str = "/dev/vchiq";
-const VCHIQ_MAX_INSTANCE_SERVICES: usize = 32;
 const VCHIQ_SERVICE_HANDLE_INVALID: ServiceHandle = 0;
 const NOTIFY_BUFFER_SIZE: usize = 1024 / size_of::<u32>();
 const SLOT_SIZE: usize = 4096;
@@ -36,6 +34,9 @@ const TVSERVICE_CLIENT_NAME: FourCC = FourCC::from_str("TVSV");
 const TVSERVICE_NOTIFY_NAME: FourCC = FourCC::from_str("TVNT");
 const CECSERVICE_CLIENT_NAME: FourCC = FourCC::from_str("CECS");
 const CECSERVICE_NOTIFY_NAME: FourCC = FourCC::from_str("CECN");
+const GENCMD_CLIENT_NAME: FourCC = FourCC::from_str("GCMD");
+const DISPMANX_CLIENT_NAME: FourCC = FourCC::from_str("DISP");
+const DISPMANX_NOTIFY_NAME: FourCC = FourCC::from_str("UPDH");
 const TVSERVICE_NOTIFY_SIZE: usize = size_of::<u32>() * 3;
 const CEC_NOTIFY_SIZE: usize = size_of::<u32>() * 5;
 
@@ -80,6 +81,8 @@ const VCHIQ_VERSION_CLOSE_DELIVERED: VersionNum = 7;
 
 const VC_TVSERVICE_VER: VersionNum = 1;
 const VC_CECSERVICE_VER: VersionNum = 1;
+const VC_GENCMD_VER: VersionNum = 1;
+const VC_DISPMANX_VER: VersionNum = 1;
 
 lazy_static! {
     static ref INITIALIZED: Mutex<bool> = Mutex::new(false);
@@ -119,6 +122,7 @@ where
  */
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
+#[allow(dead_code)]
 enum HDMIReason {
     Unknown,
     Unplugged = 1 << 0,       /*<HDMI cable is detached */
@@ -137,6 +141,7 @@ enum HDMIReason {
  */
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
+#[allow(dead_code)]
 enum CECReason {
     None = 0,                  //Reserved - NOT TO BE USED
     Tx = 1 << 0,               /*<A message has been transmitted */
@@ -150,12 +155,48 @@ enum CECReason {
     LogicalAddrList = 1 << 15, /*<Only for passive mode, if the logical address is lost for whatever reason, this will be triggered */
 }
 
+// CEC service commands
+#[repr(u32)]
+#[allow(dead_code)]
+enum CECServiceCommand {
+    RegisterCmd = 0,
+    RegisterALl,
+    DeregisterCmd,
+    DeregisterAll,
+    SendMsg,
+    GetLogicalAddr,
+    AllocLogicalAddr,
+    ReleaseLogicalAddr,
+    GetTopology,
+    SetVendorId,
+    SetOSDName,
+    GetPhysicalAddr,
+    GetVendorId,
+    //The following 3 commands are used when CEC middleware is
+    //running in passive mode (i.e. it does not allocate
+    //logical address automatically)
+    PollAddr,
+    SetLogicalAddr,
+    AddDevice,
+    SetPassive,
+}
+
 type Signal = Arc<(Mutex<bool>, Condvar)>;
 
 struct MsgbufArray([*mut c_void; 8]);
 impl MsgbufArray {
     fn new() -> MsgbufArray {
-        MsgbufArray(array_init(|_: usize| unsafe { libc::malloc(MSGBUF_SIZE) }))
+        MsgbufArray(array_init(|_: usize| ptr::null_mut()))
+    }
+    fn replenish(&mut self, remaining_available: usize) -> usize {
+        if remaining_available < self.len() {
+            debug!("buffers at {}, allocating more", remaining_available);
+            for i in remaining_available..self.len() {
+                let MsgbufArray(arr) = self;
+                arr[i] = unsafe { libc::malloc(MSGBUF_SIZE) };
+            }
+        }
+        self.len()
     }
     fn as_mut_ptr(&mut self) -> *mut *mut c_void {
         let MsgbufArray(arr) = self;
@@ -170,11 +211,34 @@ impl Drop for MsgbufArray {
     fn drop(&mut self) {
         let MsgbufArray(arr) = self;
         for ptr in arr.iter() {
-            unsafe { libc::free(*ptr) }
+            if !ptr.is_null() {
+                unsafe { libc::free(*ptr) }
+            }
         }
     }
 }
 
+struct ServiceInUse {
+    fd: RawFd,
+    handle: ServiceHandle,
+}
+impl ServiceInUse {
+    fn new(f: &File, handle: ServiceHandle) -> Result<ServiceInUse, nix::Error> {
+        let fd = f.as_raw_fd();
+        retry(|| unsafe { vchiq_ioctl::use_service(fd, handle as usize) })?;
+        Ok(ServiceInUse {
+            fd: fd,
+            handle: handle,
+        })
+    }
+}
+impl Drop for ServiceInUse {
+    fn drop(&mut self) {
+        retry(|| unsafe { vchiq_ioctl::release_service(self.fd, self.handle as usize) }).unwrap();
+    }
+}
+
+#[allow(dead_code)]
 pub struct HardwareInterface {
     // File for directly interfacing with hardware.
     dev_vchiq: Arc<Mutex<File>>,
@@ -201,17 +265,30 @@ pub enum CreationError {
     #[error("VHCIQ was already initialized")]
     AlreadyInitialized,
     #[error("Could not open vchiq device")]
-    IOError {
-        #[from]
-        source: std::io::Error,
-        backtrace: Backtrace,
-    },
+    IOError(#[from] std::io::Error),
     #[error("ioctl call failed")]
-    IoctlError {
-        #[from]
-        source: nix::Error,
-        backtrace: Backtrace,
-    },
+    IoctlError(#[from] nix::Error),
+}
+
+#[repr(C)]
+struct SendMsgParam {
+    follower: u32,
+    length: u32,
+    payload: [u8; 16], //max. 15 bytes padded to 16
+    is_reply: u32,
+}
+impl SendMsgParam {
+    pub fn new(follower: LogicalAddress, payload: &[u8], is_reply: bool) -> SendMsgParam {
+        let mut internal_payload = [0; 16];
+        internal_payload[0..payload.len()].copy_from_slice(payload);
+
+        SendMsgParam {
+            follower: (follower as u32).to_be(),
+            length: (payload.len() as u32).to_be(),
+            payload: internal_payload,
+            is_reply: (is_reply as u32).to_be(),
+        }
+    }
 }
 
 impl HardwareInterface {
@@ -256,19 +333,20 @@ impl HardwareInterface {
         *already_initialized = true;
 
         // Open the /dev/vchiq file and set up the correct library version
-        let dev_vchiq = File::open(DEV_VCHIQ)?;
+        let dev_vchiq = OpenOptions::new().read(true).write(true).open(DEV_VCHIQ)?;
         let fd = dev_vchiq.as_raw_fd();
         let config = get_config(&dev_vchiq)?;
         if config.version < VCHIQ_VERSION_MIN || config.version_min > VCHIQ_VERSION {
             return Err(CreationError::CouldNotRetrieveDriverVersion);
         }
+        debug!("vchiq config: {:?}", config);
         if config.version >= VCHIQ_VERSION_LIB_VERSION {
-            unsafe { retry(|| vchiq_ioctl::lib_version(fd, VCHIQ_VERSION as libc::c_ulong))? };
+            unsafe { retry(|| vchiq_ioctl::lib_version(fd, VCHIQ_VERSION as usize))? };
         }
         let use_close_delivered = config.version >= VCHIQ_VERSION_CLOSE_DELIVERED;
 
         // Connect and spin up a thread
-        unsafe { retry(|| vchiq_ioctl::connect(fd))? };
+        unsafe { retry(|| vchiq_ioctl::connect(fd, 0))? };
         let vchiq = Arc::new(Mutex::new(dev_vchiq));
         let completion_thread = thread::Builder::new()
             .name("VCHIQ completion".into())
@@ -281,10 +359,15 @@ impl HardwareInterface {
                     count: completion_data.len(),
                     buf: completion_data.as_mut_ptr(),
                     msgbufsize: msgbufs.len(),
+                    msgbufcount: 0,
                     msgbufs: msgbufs.as_mut_ptr(),
                 };
 
                 loop {
+                    // Fill up completion_data with allocated memory.
+                    // This could potentionally leak memory.
+                    args.msgbufcount = msgbufs.replenish(args.msgbufcount);
+
                     // Continually await completion until no messages are received.
                     // We intentionally avoid grabbing a mutex.
                     let cnt = retry(|| unsafe { vchiq_ioctl::await_completion(fd, &mut args) })
@@ -304,7 +387,7 @@ impl HardwareInterface {
                             // retry(|| unsafe {
                             //     vchiq_ioctl::close_delivered(
                             //         file.as_raw_fd(),
-                            //         service.handle as libc::c_ulong,
+                            //         service.handle as c_ulong,
                             //     )
                             // })
                             // .unwrap();
@@ -314,6 +397,24 @@ impl HardwareInterface {
             })?;
 
         // Initialize all the clients we intend on using.
+        let gencmd_client_signal: Signal = Arc::new((Mutex::new(false), Condvar::new()));
+        let mut gencmd_client = Self::create_service_req(
+            GENCMD_CLIENT_NAME,
+            gencmd_client_signal.clone(),
+            VC_GENCMD_VER,
+        );
+        let dispmanx_client_signal: Signal = Arc::new((Mutex::new(false), Condvar::new()));
+        let mut dispmanx_client = Self::create_service_req(
+            DISPMANX_CLIENT_NAME,
+            dispmanx_client_signal.clone(),
+            VC_DISPMANX_VER,
+        );
+        let dispmanx_notify_signal: Signal = Arc::new((Mutex::new(false), Condvar::new()));
+        let mut dispmanx_notify = Self::create_service_req(
+            DISPMANX_NOTIFY_NAME,
+            dispmanx_notify_signal.clone(),
+            VC_DISPMANX_VER,
+        );
         let tvservice_client_signal: Signal = Arc::new((Mutex::new(false), Condvar::new()));
         let mut tvservice_client = Self::create_service_req(
             TVSERVICE_CLIENT_NAME,
@@ -342,11 +443,23 @@ impl HardwareInterface {
 
         let file = vchiq.lock().unwrap();
         let fd = file.as_raw_fd();
+        retry(|| unsafe { vchiq_ioctl::create_service(fd, &mut gencmd_client) })?;
+        retry(|| unsafe { vchiq_ioctl::release_service(fd, gencmd_client.handle as usize) })?;
+        retry(|| unsafe { vchiq_ioctl::create_service(fd, &mut dispmanx_client) })?;
+        retry(|| unsafe { vchiq_ioctl::create_service(fd, &mut dispmanx_notify) })?;
+        retry(|| unsafe { vchiq_ioctl::release_service(fd, dispmanx_client.handle as usize) })?;
+        retry(|| unsafe { vchiq_ioctl::release_service(fd, dispmanx_notify.handle as usize) })?;
+
         retry(|| unsafe { vchiq_ioctl::create_service(fd, &mut tvservice_client) })?;
         retry(|| unsafe { vchiq_ioctl::create_service(fd, &mut tvservice_notify) })?;
+        retry(|| unsafe { vchiq_ioctl::release_service(fd, tvservice_client.handle as usize) })?;
+        retry(|| unsafe { vchiq_ioctl::release_service(fd, tvservice_notify.handle as usize) })?;
         retry(|| unsafe { vchiq_ioctl::create_service(fd, &mut cec_client) })?;
         retry(|| unsafe { vchiq_ioctl::create_service(fd, &mut cec_notify) })?;
+        retry(|| unsafe { vchiq_ioctl::release_service(fd, cec_client.handle as usize) })?;
+        retry(|| unsafe { vchiq_ioctl::release_service(fd, cec_notify.handle as usize) })?;
         drop(file);
+        debug!("{:x?}", cec_notify);
 
         // Spawn notification threads now that we have the handles
         let tvservice_notify_handle = tvservice_notify.handle;
@@ -500,13 +613,38 @@ impl HardwareInterface {
     // due to often (more than 20% test cases - CEC bus with 8 devices)
     // irregularities on returned status, repeat until we get SAME
     // result twice in a row
+}
+impl CECConnection for HardwareInterface {
+    fn transmit(&self, cmd: CECCommand) -> Result<(), CECError> {
+        let payload = if cmd.message == CECMessage::None {
+            vec![]
+        } else {
+            let mut p = vec![cmd.message.get_opcode() as u8];
+            p.extend(cmd.message.get_parameters());
+            p
+        };
+        let elements = [
+            vchiq_ioctl::Element::new(&CECServiceCommand::SendMsg),
+            vchiq_ioctl::Element::new(&SendMsgParam::new(cmd.destination, &payload, true)),
+        ];
+        let msg = vchiq_ioctl::QueueMessage::new(self.cec_client_handle, &elements);
 
-    // vc_cec_send_message2
-    pub fn send_cec_message(
-        _follower: LogicalAddress,
-        _payload: &[u8],
-        _is_reply: bool,
-    ) -> anyhow::Result<()> {
+        let file = self.dev_vchiq.lock().unwrap();
+        let _svc = ServiceInUse::new(&file, self.cec_client_handle);
+        // TODO(stvn): Return error instead of unwrap
+        let status = vchiq_ioctl::Status::try_from(
+            retry(|| unsafe { vchiq_ioctl::queue_message(file.as_raw_fd(), &msg) }).unwrap() as i8,
+        )
+        .unwrap();
+        drop(msg);
+
+        match status {
+            vchiq_ioctl::Status::Success => {}
+            vchiq_ioctl::Status::Error | vchiq_ioctl::Status::Retry => {
+                warn!("failed to send command {:?}, error: {:?}", cmd, status)
+                // TODO(stvn): Return error
+            }
+        }
         // check length under CEC_MAX_XMIT_LENGTH
         // change numbers to bigendian
         // shove into CEC_SEND_MSG_PARAM_T
@@ -517,9 +655,6 @@ impl HardwareInterface {
         //   vchi_msg_dequeue
         //  vcos_event_wait(&cecservice_message_available_event) until read>0
 
-        Ok(())
-    }
-    fn msg_queuev(&self) {
         // struct Element {
         //     data: *const c_void,
         //     size: i32,
@@ -532,10 +667,6 @@ impl HardwareInterface {
         // }
         //handle vector
         // Remove all services
-    }
-}
-impl CECConnection for HardwareInterface {
-    fn transmit(&self, cmd: CECCommand) -> Result<(), CECError> {
         Ok(())
     }
 }
