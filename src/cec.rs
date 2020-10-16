@@ -2,11 +2,14 @@ pub mod vchi;
 pub mod vchiq_ioctl;
 
 use log::debug;
-use num_enum::TryFromPrimitive;
+use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
+use std::array::TryFromSliceError;
+use std::convert::{TryFrom, TryInto};
+use std::ffi::{CStr, FromBytesWithNulError};
 use std::fmt;
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
 #[allow(dead_code)]
 pub enum PowerStatus {
     On = 0,
@@ -29,7 +32,7 @@ pub enum AbortReason {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
 #[allow(dead_code)]
 pub enum Opcode {
     FeatureAbort = 0x00,
@@ -105,11 +108,11 @@ pub enum Opcode {
     Abort = 0xFF,
 }
 
-#[repr(i8)]
+#[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
 #[allow(dead_code)]
 pub enum LogicalAddress {
-    Unknown = -1,
+    Unknown = 0xff,
     TV = 0,
     RecordingDevice1 = 1,
     RecordingDevice2 = 2,
@@ -143,7 +146,7 @@ pub enum DeviceTypes {
 }
 
 #[repr(u8)]
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
 #[allow(dead_code)]
 pub enum UserControl {
     Select = 0x00,
@@ -228,21 +231,26 @@ impl fmt::Display for CECError {
     }
 }
 
-type CECPhysicalAddress = [u8; 4];
+type PhysicalAddress = u16;
+fn physical_address_from_bytes(b: &[u8]) -> Result<PhysicalAddress, TryFromSliceError> {
+    Ok(u16::from_be_bytes(b.try_into()?))
+}
 
 #[derive(Debug, PartialEq)]
-#[allow(dead_code)]
 enum CECMessage {
     None,
     ImageViewOn,
     Standby,
     ActiveSource {
-        physical_address: CECPhysicalAddress,
+        physical_address: PhysicalAddress,
     },
     GivePhysicalAddress,
     ReportPhysicalAddress {
-        physical_address: CECPhysicalAddress,
+        physical_address: PhysicalAddress,
         device_type: LogicalAddress,
+    },
+    SetStreamPath {
+        physical_address: PhysicalAddress,
     },
     GiveOSDName,
     SetOSDName {
@@ -251,6 +259,14 @@ enum CECMessage {
     GiveDevicePowerStatus,
     ReportPowerStatus {
         power_status: PowerStatus,
+    },
+    GiveDeviceVendorID,
+    DeviceVendorID {
+        vendor_id: u32,
+    },
+    RoutingChange {
+        original_address: PhysicalAddress,
+        new_address: PhysicalAddress,
     },
     UserControlPressed {
         user_control_code: UserControl,
@@ -267,43 +283,75 @@ impl CECMessage {
             CECMessage::ActiveSource { .. } => Opcode::ActiveSource,
             CECMessage::GivePhysicalAddress => Opcode::GivePhysicalAddress,
             CECMessage::ReportPhysicalAddress { .. } => Opcode::ReportPhysicalAddress,
+            CECMessage::SetStreamPath { .. } => Opcode::SetStreamPath,
             CECMessage::GiveOSDName => Opcode::GiveOSDName,
             CECMessage::SetOSDName { .. } => Opcode::SetOSDName,
             CECMessage::GiveDevicePowerStatus => Opcode::GiveDevicePowerStatus,
             CECMessage::ReportPowerStatus { .. } => Opcode::ReportPowerStatus,
+            CECMessage::GiveDeviceVendorID => Opcode::GiveDeviceVendorID,
+            CECMessage::DeviceVendorID { .. } => Opcode::DeviceVendorID,
+            CECMessage::RoutingChange { .. } => Opcode::RoutingChange,
             CECMessage::UserControlPressed { .. } => Opcode::UserControlPressed,
             CECMessage::UserControlReleased => Opcode::UserControlReleased,
         }
     }
     fn get_parameters(&self) -> Vec<u8> {
         match &self {
-            CECMessage::ActiveSource { physical_address } => physical_address.to_vec(),
+            CECMessage::ActiveSource { physical_address }
+            | CECMessage::SetStreamPath { physical_address } => {
+                physical_address.to_be_bytes().to_vec()
+            }
             CECMessage::ReportPhysicalAddress {
                 physical_address,
                 device_type,
             } => {
-                let mut params: Vec<u8> = physical_address.to_vec();
+                let mut params: Vec<u8> = physical_address.to_be_bytes().to_vec();
                 params.push(*device_type as u8);
                 params
             }
             CECMessage::SetOSDName { name } => name.as_bytes().to_vec(),
-            CECMessage::ReportPowerStatus { power_status } => {
-                let code = *power_status as u32;
-                vec![((code >> 8) & 0xf) as u8, ((code >> 0) & 0xf) as u8]
+            CECMessage::ReportPowerStatus { power_status } => vec![*power_status as u8],
+            CECMessage::DeviceVendorID { vendor_id } => {
+                let code = *vendor_id as u32;
+                code.to_be_bytes()[1..].to_vec()
             }
-            CECMessage::UserControlPressed { user_control_code } => {
-                let code = *user_control_code as u32;
-                vec![((code >> 8) & 0xf) as u8, ((code >> 0) & 0xf) as u8]
+            CECMessage::RoutingChange {
+                original_address,
+                new_address,
+            } => {
+                let mut params: Vec<u8> = original_address.to_be_bytes().to_vec();
+                params.extend(&new_address.to_be_bytes());
+                params
             }
+            CECMessage::UserControlPressed { user_control_code } => vec![*user_control_code as u8],
             CECMessage::None
             | CECMessage::ImageViewOn
             | CECMessage::Standby
             | CECMessage::GivePhysicalAddress
             | CECMessage::GiveOSDName
             | CECMessage::UserControlReleased
-            | CECMessage::GiveDevicePowerStatus => vec![],
+            | CECMessage::GiveDevicePowerStatus
+            | CECMessage::GiveDeviceVendorID => vec![],
         }
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("Command is too short")]
+    InputTooShort,
+    #[error("Command has unknown logical address")]
+    UnknownLogicalAddr,
+    #[error("Command has unknown opcode")]
+    UnknownOpcode,
+    #[error("Invalid power status")]
+    BadPowerStatus(#[from] TryFromPrimitiveError<PowerStatus>),
+    #[error("Invalid user control code")]
+    BadUserControlCode(#[from] TryFromPrimitiveError<UserControl>),
+    #[error("Bad internal slicing")]
+    BadInternalSlicing(#[from] TryFromSliceError),
+    #[error("Invalid string")]
+    BadString(#[from] FromBytesWithNulError),
 }
 
 #[derive(Debug)]
@@ -311,6 +359,66 @@ pub struct CECCommand {
     initiator: LogicalAddress,
     destination: LogicalAddress,
     message: CECMessage,
+}
+impl CECCommand {
+    // TODO(stvn): Switch to returning an error
+    fn from_raw(input: &[u8]) -> Result<CECCommand, Error> {
+        if input.len() == 0 {
+            return Err(Error::InputTooShort);
+        }
+        let initiator = LogicalAddress::try_from((input[0] & 0xf0) >> 4)
+            .map_err(|_| Error::UnknownLogicalAddr)?;
+        let destination =
+            LogicalAddress::try_from(input[0] & 0x0f).map_err(|_| Error::UnknownLogicalAddr)?;
+        if initiator != destination && input.len() < 2 {
+            return Err(Error::InputTooShort);
+        }
+        let opcode = Opcode::try_from(input[1]).map_err(|_| Error::UnknownOpcode)?;
+        let message = match opcode {
+            Opcode::ImageViewOn => CECMessage::ImageViewOn,
+            Opcode::Standby => CECMessage::Standby,
+            Opcode::GivePhysicalAddress => CECMessage::GivePhysicalAddress,
+            Opcode::GiveOSDName => CECMessage::GiveOSDName,
+            Opcode::GiveDevicePowerStatus => CECMessage::GiveDevicePowerStatus,
+            Opcode::ActiveSource => CECMessage::ActiveSource {
+                physical_address: physical_address_from_bytes(&input[2..4])?,
+            },
+            Opcode::ReportPhysicalAddress => CECMessage::ReportPhysicalAddress {
+                physical_address: physical_address_from_bytes(&input[2..4])?,
+                device_type: LogicalAddress::try_from(input[6])
+                    .map_err(|_| Error::UnknownLogicalAddr)?,
+            },
+            Opcode::SetOSDName => CECMessage::SetOSDName {
+                name: CStr::from_bytes_with_nul(&input[2..])?
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+            Opcode::ReportPowerStatus => CECMessage::ReportPowerStatus {
+                power_status: PowerStatus::try_from(input[2])?,
+            },
+            Opcode::SetStreamPath => CECMessage::SetStreamPath {
+                physical_address: physical_address_from_bytes(&input[2..4])?,
+            },
+            Opcode::GiveDeviceVendorID => CECMessage::GiveDeviceVendorID,
+            Opcode::DeviceVendorID => CECMessage::DeviceVendorID {
+                vendor_id: (input[2] as u32) << 16 | (input[3] as u32) << 8 | (input[4] as u32),
+            },
+            Opcode::RoutingChange => CECMessage::RoutingChange {
+                original_address: physical_address_from_bytes(&input[2..4])?,
+                new_address: physical_address_from_bytes(&input[4..6])?,
+            },
+            Opcode::UserControlPressed => CECMessage::UserControlPressed {
+                user_control_code: UserControl::try_from(input[2])?,
+            },
+            Opcode::UserControlReleased => CECMessage::UserControlReleased,
+            _ => return Err(Error::UnknownOpcode),
+        };
+        Ok(CECCommand {
+            initiator: initiator,
+            destination: destination,
+            message: message,
+        })
+    }
 }
 
 pub trait CECConnection {
@@ -382,13 +490,13 @@ impl CEC {
     }
     pub fn set_input(&self, new_input: String) -> Result<(), CECError> {
         // TODO(stvn): Fix this assumption!
-        let old_addr = [0, 0, 0, 3];
+        let old_addr = 0x3000;
         let new_addr = match new_input.as_str() {
-            "hdmi1" => [0, 0, 0, 1],
-            "hdmi2" => [0, 0, 0, 2],
-            "hdmi3" => [0, 0, 0, 3],
-            "hdmi4" => [0, 0, 0, 4],
-            _ => [0, 0, 0, 0],
+            "hdmi1" => 0x1000,
+            "hdmi2" => 0x2000,
+            "hdmi3" => 0x3000,
+            "hdmi4" => 0x4000,
+            _ => 0x0000,
         };
         self.broadcast(CECMessage::ReportPhysicalAddress {
             physical_address: new_addr,
@@ -423,12 +531,12 @@ mod tests {
     test_cec_msg! {none_msg, CECMessage::None, "00"}
     test_cec_msg! {image_view, CECMessage::ImageViewOn, "04"}
     test_cec_msg! {active_source, CECMessage::ActiveSource{
-        physical_address:[0,0,0,1],
-    }, "82:00:00:00:01"}
+        physical_address:0x1000,
+    }, "82:10:00"}
     test_cec_msg! {report_physical_address, CECMessage::ReportPhysicalAddress{
-        physical_address:[0,0,0,1],
+        physical_address:0x1000,
         device_type:LogicalAddress::Tuner1,
-    }, "84:00:00:00:01:03"}
+    }, "84:10:00:03"}
     test_cec_msg! {report_power_status, CECMessage::ReportPowerStatus{
         power_status:PowerStatus::Standby,
     }, "90:00:01"}

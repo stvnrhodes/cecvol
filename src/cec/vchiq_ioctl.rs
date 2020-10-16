@@ -111,7 +111,6 @@
 
 use core::ffi::c_void;
 use core::mem::size_of;
-use log::debug;
 use nix::{ioctl_none, ioctl_readwrite, ioctl_write_ptr};
 use num_enum::TryFromPrimitive;
 
@@ -146,7 +145,7 @@ ioctl_none_write_int!(release_service, VCHIQ_IOC_MAGIC, 13);
 ioctl_write_ptr!(set_service_option, VCHIQ_IOC_MAGIC, 14, SetServiceOption);
 ioctl_write_ptr!(dump_phys_mem, VCHIQ_IOC_MAGIC, 15, DumpPhysMem);
 ioctl_none_write_int!(lib_version, VCHIQ_IOC_MAGIC, 16);
-ioctl_none!(close_delivered, VCHIQ_IOC_MAGIC, 17);
+ioctl_none_write_int!(close_delivered, VCHIQ_IOC_MAGIC, 17);
 
 pub type ServiceHandle = usize;
 pub type VersionNum = i16;
@@ -200,41 +199,6 @@ pub struct Header {
 }
 
 pub type Callback = extern "C" fn(Reason, *const Header, ServiceHandle, *mut c_void) -> Status;
-
-/// Unpack a Rust closure, extracting a `void*` pointer to the data and a
-/// trampoline function which can be used to invoke it.
-///
-/// # Safety
-///
-/// It is the user's responsibility to ensure the closure outlives the returned
-/// `void*` pointer.
-///
-/// Calling the trampoline function with anything except the `void*` pointer
-/// will result in *Undefined Behaviour*.
-///
-/// The closure should guarantee that it never panics, seeing as panicking
-/// across the FFI barrier is *Undefined Behaviour*. You may find
-/// `std::panic::catch_unwind()` useful.
-pub fn callback_closure<F>(closure: &mut F) -> (Callback, *mut c_void)
-where
-    F: FnMut(Reason, Option<&Header>, ServiceHandle) -> Status,
-{
-    extern "C" fn trampoline<F>(
-        reason: Reason,
-        header: *const Header,
-        handle: ServiceHandle,
-        data: *mut c_void,
-    ) -> Status
-    where
-        F: FnMut(Reason, Option<&Header>, ServiceHandle) -> Status,
-    {
-        debug!("{:?} {} {:?}", reason, handle, data);
-        let closure: &mut F = unsafe { &mut *(data as *mut F) };
-        (*closure)(reason, unsafe { header.as_ref() }, handle)
-    }
-
-    (trampoline::<F>, closure as *mut F as *mut c_void)
-}
 
 #[repr(C)]
 #[derive(Debug)]
