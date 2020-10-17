@@ -134,7 +134,7 @@ pub enum LogicalAddress {
 #[repr(i8)]
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[allow(dead_code)]
-pub enum DeviceTypes {
+pub enum DeviceType {
     TV = 0,
     RecordingDevice = 1,
     Reserved = 2,
@@ -223,11 +223,16 @@ pub enum UserControl {
 }
 
 #[derive(Debug)]
-pub struct CECError {}
+pub enum CECError {
+    Other(Box<dyn std::error::Error>),
+}
+
 impl actix_http::ResponseError for CECError {}
 impl fmt::Display for CECError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
+        match self {
+            Self::Other(err) => write!(f, "Application-specific error: {}", err),
+        }
     }
 }
 
@@ -241,6 +246,7 @@ enum CECMessage {
     None,
     ImageViewOn,
     Standby,
+    RequestActiveSource,
     ActiveSource {
         physical_address: PhysicalAddress,
     },
@@ -281,6 +287,7 @@ impl CECMessage {
             CECMessage::ImageViewOn => Opcode::ImageViewOn,
             CECMessage::Standby => Opcode::Standby,
             CECMessage::ActiveSource { .. } => Opcode::ActiveSource,
+            CECMessage::RequestActiveSource => Opcode::RequestActiveSource,
             CECMessage::GivePhysicalAddress => Opcode::GivePhysicalAddress,
             CECMessage::ReportPhysicalAddress { .. } => Opcode::ReportPhysicalAddress,
             CECMessage::SetStreamPath { .. } => Opcode::SetStreamPath,
@@ -327,6 +334,7 @@ impl CECMessage {
             CECMessage::None
             | CECMessage::ImageViewOn
             | CECMessage::Standby
+            | CECMessage::RequestActiveSource
             | CECMessage::GivePhysicalAddress
             | CECMessage::GiveOSDName
             | CECMessage::UserControlReleased
@@ -356,7 +364,7 @@ pub enum Error {
 
 #[derive(Debug)]
 pub struct CECCommand {
-    initiator: LogicalAddress,
+    initiator: Option<LogicalAddress>,
     destination: LogicalAddress,
     message: CECMessage,
 }
@@ -378,6 +386,7 @@ impl CECCommand {
             Opcode::ImageViewOn => CECMessage::ImageViewOn,
             Opcode::Standby => CECMessage::Standby,
             Opcode::GivePhysicalAddress => CECMessage::GivePhysicalAddress,
+            Opcode::RequestActiveSource => CECMessage::RequestActiveSource,
             Opcode::GiveOSDName => CECMessage::GiveOSDName,
             Opcode::GiveDevicePowerStatus => CECMessage::GiveDevicePowerStatus,
             Opcode::ActiveSource => CECMessage::ActiveSource {
@@ -385,7 +394,7 @@ impl CECCommand {
             },
             Opcode::ReportPhysicalAddress => CECMessage::ReportPhysicalAddress {
                 physical_address: physical_address_from_bytes(&input[2..4])?,
-                device_type: LogicalAddress::try_from(input[6])
+                device_type: LogicalAddress::try_from(input[4])
                     .map_err(|_| Error::UnknownLogicalAddr)?,
             },
             Opcode::SetOSDName => CECMessage::SetOSDName {
@@ -414,7 +423,7 @@ impl CECCommand {
             _ => return Err(Error::UnknownOpcode),
         };
         Ok(CECCommand {
-            initiator: initiator,
+            initiator: Some(initiator),
             destination: destination,
             message: message,
         })
@@ -423,25 +432,27 @@ impl CECCommand {
 
 pub trait CECConnection {
     fn transmit(&self, cmd: CECCommand) -> Result<(), CECError>;
+    fn get_logical_address(&self) -> Result<LogicalAddress, CECError>;
+    fn get_physical_address(&self) -> Result<PhysicalAddress, CECError>;
 }
 
 pub struct CEC {
-    conn: Box<dyn CECConnection>,
+    conn: Box<dyn CECConnection + Send>,
 }
 
 impl CEC {
-    pub fn new(conn: Box<dyn CECConnection>) -> Self {
+    pub fn new(conn: Box<dyn CECConnection + Send>) -> Self {
         CEC { conn }
     }
 
     fn transmit(&self, destination: LogicalAddress, message: CECMessage) -> Result<(), CECError> {
         debug!("sending {:?} to {:?}", message, destination);
         self.conn.transmit(CECCommand {
-            // TODO(stvn): Don't do this implicitly
-            initiator: LogicalAddress::RecordingDevice1,
+            initiator: None,
             destination: destination,
             message: message,
         })?;
+        std::thread::sleep(std::time::Duration::from_millis(250));
         Ok(())
     }
 
@@ -490,12 +501,12 @@ impl CEC {
     }
     pub fn set_input(&self, new_input: String) -> Result<(), CECError> {
         // TODO(stvn): Fix this assumption!
-        let old_addr = 0x3000;
+        let old_addr = self.conn.get_physical_address()?;
         let new_addr = match new_input.as_str() {
-            "hdmi1" => 0x1000,
-            "hdmi2" => 0x2000,
-            "hdmi3" => 0x3000,
-            "hdmi4" => 0x4000,
+            "1" => 0x1000,
+            "2" => 0x2000,
+            "3" => 0x3000,
+            "4" => 0x4000,
             _ => 0x0000,
         };
         self.broadcast(CECMessage::ReportPhysicalAddress {
@@ -511,7 +522,6 @@ impl CEC {
         })
     }
 }
-unsafe impl Send for CEC {}
 
 #[cfg(test)]
 mod tests {
@@ -545,5 +555,5 @@ mod tests {
     }, "47:65:78:61:6d:70:6c:65"}
     test_cec_msg! {user_control_pressed, CECMessage::UserControlPressed{
         user_control_code:UserControl::Enter,
-    }, "44:00:0b"}
+    }, "44:0b"}
 }

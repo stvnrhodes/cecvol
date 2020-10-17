@@ -6,8 +6,10 @@
 // https://github.com/raspberrypi/userland/blob/master/interface/vmcs_host/vc_vchi_cecservice.c
 
 use crate::cec::vchiq_ioctl;
-use crate::cec::vchiq_ioctl::{ServiceHandle, VersionNum};
-use crate::cec::{CECCommand, CECConnection, CECError, CECMessage, LogicalAddress};
+use crate::cec::vchiq_ioctl::{Element, ServiceHandle, VersionNum};
+use crate::cec::{
+    CECCommand, CECConnection, CECError, CECMessage, DeviceType, LogicalAddress, PhysicalAddress,
+};
 use array_init::array_init;
 use core::ffi::c_void;
 use lazy_static::lazy_static;
@@ -35,6 +37,7 @@ const CECSERVICE_CLIENT_NAME: FourCC = FourCC::from_str("CECS");
 const CECSERVICE_NOTIFY_NAME: FourCC = FourCC::from_str("CECN");
 const TVSERVICE_NOTIFY_SIZE: usize = size_of::<u32>() * 3;
 const CEC_NOTIFY_SIZE: usize = size_of::<u32>() * 5;
+const OSD_NAME_LENGTH: usize = 14;
 
 struct FourCC([char; 4]);
 impl FourCC {
@@ -163,13 +166,22 @@ impl VchiqIoctls {
         Ok(vchiq_ioctl::Status::try_from(code as i8).unwrap_or(vchiq_ioctl::Status::Error))
     }
 
-    pub fn using_service<F>(&mut self, handle: ServiceHandle, func: F) -> Result<(), nix::Error>
+    pub fn use_service(&mut self, handle: ServiceHandle) -> Result<(), nix::Error> {
+        retry(|| unsafe { vchiq_ioctl::use_service(self.fd(), handle as usize) }).map(|_| ())
+    }
+
+    pub fn release_service(&mut self, handle: ServiceHandle) -> Result<(), nix::Error> {
+        retry(|| unsafe { vchiq_ioctl::release_service(self.fd(), handle as usize) }).map(|_| ())
+    }
+
+    pub fn using_service<F, E>(&mut self, handle: ServiceHandle, func: F) -> Result<(), E>
     where
-        F: FnOnce(&mut Self) -> Result<(), nix::Error>,
+        F: FnOnce(&mut Self) -> Result<(), E>,
+        E: std::convert::From<nix::Error>,
     {
-        retry(|| unsafe { vchiq_ioctl::use_service(self.fd(), handle as usize) })?;
+        self.use_service(handle)?;
         func(self)?;
-        retry(|| unsafe { vchiq_ioctl::release_service(self.fd(), handle as usize) })?;
+        self.release_service(handle)?;
         Ok(())
     }
     // TODO(stvn): Implement await_completion through returning a closure?
@@ -224,7 +236,7 @@ enum CECReason {
     RemoteReleased = 1 << 5,   /*<<Vendor Remote Button Up> */
     LogicalAddr = 1 << 6,      /*<New logical address allocated or released */
     Topology = 1 << 7,         /*<Topology is available */
-    LogicalAddrList = 1 << 15, /*<Only for passive mode, if the logical address is lost for whatever reason, this will be triggered */
+    LogicalAddrLost = 1 << 15, /*<Only for passive mode, if the logical address is lost for whatever reason, this will be triggered */
 }
 
 // CEC service commands
@@ -232,7 +244,7 @@ enum CECReason {
 #[allow(dead_code)]
 enum CECServiceCommand {
     RegisterCmd = 0,
-    RegisterALl,
+    RegisterAll,
     DeregisterCmd,
     DeregisterAll,
     SendMsg,
@@ -310,6 +322,104 @@ impl Drop for MsgbufArray {
     }
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum CreationError {
+    #[error("Could not retrieve driver version")]
+    CouldNotRetrieveDriverVersion,
+    #[error("VHCIQ was already initialized")]
+    AlreadyInitialized,
+    #[error("Could not open vchiq device")]
+    IOError(#[from] std::io::Error),
+    #[error("ioctl call failed")]
+    IoctlError(#[from] nix::Error),
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ServiceError {
+    #[error("No acknowledgement")]
+    NoAck,
+    #[error("In the process of shutting down")]
+    Shutdown,
+    #[error("Block is busy")]
+    Busy,
+    #[error("No logical address")]
+    NoLogicalAddr,
+    #[error("No physical address")]
+    NoPhysicalAddr,
+    #[error("NoTopology")]
+    NoTopology,
+    #[error("Invalid follower")]
+    InvalidFollower,
+    #[error("Invalid arguments")]
+    InvalidArgument,
+    #[error("No status returned")]
+    MissingStatus,
+    #[error("Error when queuing message")]
+    VchiqError,
+    #[error("Retriable error when queuing message")]
+    RetryError,
+    #[error("Invalid logical address")]
+    LogicalAddr(#[from] num_enum::TryFromPrimitiveError<LogicalAddress>),
+    #[error("Bad slice size")]
+    BadSliceSize(#[from] std::array::TryFromSliceError),
+    #[error("Bad ioctl call")]
+    NixError(#[from] nix::Error),
+}
+impl ServiceError {
+    fn from_ioctl_return_value(val: u8) -> Result<(), Self> {
+        match val {
+            1 => Err(Self::NoAck),
+            2 => Err(Self::Shutdown),
+            3 => Err(Self::Busy),
+            4 => Err(Self::NoLogicalAddr),
+            5 => Err(Self::NoPhysicalAddr),
+            6 => Err(Self::NoTopology),
+            7 => Err(Self::InvalidFollower),
+            8 => Err(Self::InvalidArgument),
+            _ => Ok(()),
+        }
+    }
+    fn from_vchiq_status(status: vchiq_ioctl::Status) -> Result<(), Self> {
+        match status {
+            vchiq_ioctl::Status::Error => Err(Self::VchiqError),
+            vchiq_ioctl::Status::Retry => Err(Self::RetryError),
+            vchiq_ioctl::Status::Success => Ok(()),
+        }
+    }
+}
+impl Into<CECError> for ServiceError {
+    fn into(self) -> CECError {
+        CECError::Other(Box::new(self))
+    }
+}
+
+#[repr(C)]
+struct SendMsgParam {
+    follower: u32,
+    length: u32,
+    payload: [u8; 16], //max. 15 bytes padded to 16
+    is_reply: u32,
+}
+impl SendMsgParam {
+    pub fn new(follower: LogicalAddress, payload: &[u8], is_reply: bool) -> SendMsgParam {
+        let mut internal_payload = [0; 16];
+        internal_payload[0..payload.len()].copy_from_slice(payload);
+
+        SendMsgParam {
+            follower: (follower as u32).to_le(),
+            length: (payload.len() as u32).to_le(),
+            payload: internal_payload,
+            is_reply: (is_reply as u32).to_le(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ServiceUserdata<'a> {
+    signal: &'a Signal,
+    handle: ServiceHandle,
+}
+
 #[allow(dead_code)]
 pub struct HardwareInterface {
     // File for directly interfacing with hardware.
@@ -328,45 +438,6 @@ pub struct HardwareInterface {
     tvservice_notify_thread: thread::JoinHandle<()>,
     cec_notify_thread: thread::JoinHandle<()>,
     completion_thread: thread::JoinHandle<()>,
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum CreationError {
-    #[error("Could not retrieve driver version")]
-    CouldNotRetrieveDriverVersion,
-    #[error("VHCIQ was already initialized")]
-    AlreadyInitialized,
-    #[error("Could not open vchiq device")]
-    IOError(#[from] std::io::Error),
-    #[error("ioctl call failed")]
-    IoctlError(#[from] nix::Error),
-}
-
-#[repr(C)]
-struct SendMsgParam {
-    follower: u32,
-    length: u32,
-    payload: [u8; 16], //max. 15 bytes padded to 16
-    is_reply: u32,
-}
-impl SendMsgParam {
-    pub fn new(follower: LogicalAddress, payload: &[u8], is_reply: bool) -> SendMsgParam {
-        let mut internal_payload = [0; 16];
-        internal_payload[0..payload.len()].copy_from_slice(payload);
-
-        SendMsgParam {
-            follower: (follower as u32).to_be(),
-            length: (payload.len() as u32).to_be(),
-            payload: internal_payload,
-            is_reply: (is_reply as u32).to_be(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct ServiceUserdata<'a> {
-    signal: &'a Signal,
-    handle: ServiceHandle,
 }
 
 impl HardwareInterface {
@@ -537,9 +608,9 @@ impl HardwareInterface {
                             let reason_num =
                                 u16::from_le_bytes(notify_buffer[0..2].try_into().unwrap());
                             let reason = CECReason::try_from(reason_num).unwrap_or(CECReason::None);
-                            let params = &notify_buffer[4..20];
+                            let msg_size = notify_buffer[2] as usize;
+                            let params = &notify_buffer[4..4 + msg_size];
 
-                            // https://github.com/raspberrypi/userland/blob/master/interface/vmcs_host/vc_cec.h#L409
                             match reason {
                                 CECReason::LogicalAddr => {
                                     let logical = LogicalAddress::try_from(params[0])
@@ -548,17 +619,38 @@ impl HardwareInterface {
                                         u16::from_be_bytes(params[4..6].try_into().unwrap());
                                     info!("logical: {:?}, physical: {:x?}", logical, physical);
                                 }
-                                CECReason::Rx => {
+                                CECReason::Rx
+                                | CECReason::Tx
+                                | CECReason::ButtonPressed
+                                | CECReason::ButtonReleased
+                                | CECReason::RemotePressed
+                                | CECReason::RemoteReleased => {
                                     let cmd = CECCommand::from_raw(params);
                                     match cmd {
-                                        Ok(c) => info!("{:?}", c),
+                                        Ok(c) => info!("{:?} {:x?}", reason, c),
                                         Err(_) => {
                                             info!("{:?} {:02x?}", reason, params);
                                         }
                                     }
                                 }
-                                _ => {
-                                    info!("{:?} {:02x?}", reason, params);
+                                CECReason::Topology => {
+                                    info!("devices present: {:02x?}", &params[0..2])
+                                }
+                                CECReason::LogicalAddrLost => {
+                                    let logical = LogicalAddress::try_from(params[0])
+                                        .unwrap_or(LogicalAddress::Unknown);
+                                    let physical =
+                                        u16::from_be_bytes(params[4..6].try_into().unwrap());
+                                    info!(
+                                        "lost addr, last logical: {:?}, physical: {:x?}",
+                                        logical, physical
+                                    );
+                                }
+                                CECReason::None => {
+                                    warn!(
+                                        "unknown cec notification: {:02x?}",
+                                        &notify_buffer[..20]
+                                    );
                                 }
                             }
                             // TODO(stvn): Add callbacks
@@ -601,6 +693,138 @@ impl HardwareInterface {
     // due to often (more than 20% test cases - CEC bus with 8 devices)
     // irregularities on returned status, repeat until we get SAME
     // result twice in a row
+    fn send_cec_command_with_reply(&self, elements: &[Element]) -> Result<Vec<u8>, ServiceError> {
+        let mut vec = vec![];
+        self.vchiq
+            .lock()
+            .unwrap()
+            .using_service(self.cec_client_handle, |vchiq| {
+                // Send the command.
+                let msg = vchiq_ioctl::QueueMessage::new(self.cec_client_handle, elements);
+                ServiceError::from_vchiq_status(vchiq.queue_message(msg)?)?;
+
+                // Wait for the command to be acknowledged.
+                self.cec_client_signal.wait_for_event();
+                let mut notify_buffer = [0; NOTIFY_BUFFER_SIZE];
+                let num_bytes =
+                    vchiq.dequeue_message(self.cec_client_handle, &mut notify_buffer)?;
+                if num_bytes < 1 {
+                    Err(ServiceError::MissingStatus)
+                } else {
+                    vec = notify_buffer[0..num_bytes].to_vec();
+                    Ok(())
+                }
+            })
+            .map(|_| vec)
+    }
+
+    fn send_cec_command(&self, elements: &[Element]) -> Result<(), ServiceError> {
+        match self.send_cec_command_with_reply(elements) {
+            Ok(s) => ServiceError::from_ioctl_return_value(s[0]),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn send_cec_command_without_reply(&self, elements: &[Element]) -> Result<(), ServiceError> {
+        self.vchiq
+            .lock()
+            .unwrap()
+            .using_service(self.cec_client_handle, |vchiq| {
+                // Send the command.
+                let msg = vchiq_ioctl::QueueMessage::new(self.cec_client_handle, elements);
+                ServiceError::from_vchiq_status(vchiq.queue_message(msg)?)?;
+                Ok(())
+            })
+    }
+
+    pub fn get_logical_addr(&self) -> Result<LogicalAddress, ServiceError> {
+        let elems = &[Element::new(&CECServiceCommand::GetLogicalAddr)];
+        let resp = self.send_cec_command_with_reply(elems)?;
+        LogicalAddress::try_from(resp[0] & 0xf).map_err(|e| e.into())
+    }
+
+    pub fn get_physical_addr(&self) -> Result<PhysicalAddress, ServiceError> {
+        let elems = &[Element::new(&CECServiceCommand::GetPhysicalAddr)];
+        let resp = self.send_cec_command_with_reply(elems)?;
+        Ok(u16::from_le_bytes(resp[0..2].try_into()?))
+    }
+
+    pub fn alloc_logical_addr(&self) -> Result<(), ServiceError> {
+        self.send_cec_command_without_reply(&[Element::new(&CECServiceCommand::AllocLogicalAddr)])
+    }
+
+    pub fn release_logical_address(&self) -> Result<(), ServiceError> {
+        self.send_cec_command_without_reply(&[Element::new(&CECServiceCommand::ReleaseLogicalAddr)])
+    }
+
+    pub fn set_vendor_id(&self, vendor_id: u32) -> Result<(), ServiceError> {
+        let id_bytes = vendor_id.to_le_bytes();
+        self.send_cec_command_without_reply(&[
+            Element::new(&CECServiceCommand::SetVendorId),
+            Element::new(&id_bytes),
+        ])
+    }
+
+    pub fn set_osd_name(&self, osd_name: &str) -> Result<(), ServiceError> {
+        let mut osd_bytes = [0; OSD_NAME_LENGTH];
+        osd_bytes[..osd_name.len()].copy_from_slice(osd_name.as_bytes());
+        self.send_cec_command_without_reply(&[
+            Element::new(&CECServiceCommand::SetOSDName),
+            Element::new(&osd_bytes),
+        ])
+    }
+
+    pub fn get_vendor_id(&self, addr: LogicalAddress) -> Result<u32, ServiceError> {
+        let addr_bytes = (addr as u32).to_le_bytes();
+        let resp = self.send_cec_command_with_reply(&[
+            Element::new(&CECServiceCommand::GetVendorId),
+            Element::new(&addr_bytes),
+        ])?;
+        Ok(u32::from_le_bytes(resp[..4].try_into()?))
+    }
+
+    //     *       Sets and polls a particular address to find out
+    //  *       its availability in the CEC network. Only available
+    //  *       when CEC is running in passive mode. The host can
+    //  *       only call this function during logical address allocation stage.
+    // address is free if error code is VC_CEC_ERROR_NO_ACK
+    pub fn poll_address(&self, addr: LogicalAddress) -> Result<(), ServiceError> {
+        let addr_bytes = (addr as u32).to_le_bytes();
+        self.send_cec_command(&[
+            Element::new(&CECServiceCommand::PollAddr),
+            Element::new(&addr_bytes),
+        ])
+    }
+
+    // *       sets the logical address, device type and vendor ID to be in use.
+    // *       Only available when CEC is running in passive mode. It is the
+    // *       responsibility of the host to make sure the logical address
+    // *       is actually free (see vc_cec_poll_address). Physical address used
+    // *       will be what is read from EDID and cannot be set.
+    pub fn set_logical_address(
+        &self,
+        addr: LogicalAddress,
+        device: DeviceType,
+        vendor_id: u32,
+    ) -> Result<(), ServiceError> {
+        let params = [
+            (addr as u32).to_le(),
+            (device as u32).to_le(),
+            vendor_id.to_le(),
+        ];
+        self.send_cec_command(&[
+            Element::new(&CECServiceCommand::SetLogicalAddr),
+            Element::new(&params),
+        ])
+    }
+
+    pub fn set_passive(&self, enabled: bool) -> Result<(), ServiceError> {
+        let param = (enabled as u32).to_le();
+        self.send_cec_command(&[
+            Element::new(&CECServiceCommand::SetLogicalAddr),
+            Element::new(&param),
+        ])
+    }
 }
 impl CECConnection for HardwareInterface {
     fn transmit(&self, cmd: CECCommand) -> Result<(), CECError> {
@@ -611,35 +835,18 @@ impl CECConnection for HardwareInterface {
             p.extend(cmd.message.get_parameters());
             p
         };
-        let elements = [
-            vchiq_ioctl::Element::new(&CECServiceCommand::SendMsg),
-            vchiq_ioctl::Element::new(&SendMsgParam::new(cmd.destination, &payload, true)),
-        ];
-        let msg = vchiq_ioctl::QueueMessage::new(self.cec_client_handle, &elements);
+        self.send_cec_command(&[
+            Element::new(&CECServiceCommand::SendMsg),
+            Element::new(&SendMsgParam::new(cmd.destination, &payload, true)),
+        ])
+        .map_err(|e| e.into())
+    }
 
-        let mut vchiq = self.vchiq.lock().unwrap();
-        vchiq
-            .using_service(self.cec_client_handle, |vchiq| {
-                // Send the command.
-                let status = vchiq.queue_message(msg)?;
-                match status {
-                    vchiq_ioctl::Status::Success => {}
-                    vchiq_ioctl::Status::Error | vchiq_ioctl::Status::Retry => {
-                        warn!("failed to send command {:?}, error: {:?}", cmd, status);
-                        // TODO(stvn): Return error
-                        return Err(nix::Error::UnsupportedOperation);
-                    }
-                }
+    fn get_logical_address(&self) -> Result<LogicalAddress, CECError> {
+        self.get_logical_addr().map_err(|e| e.into())
+    }
 
-                // Wait for the command to be acknowledged. The acknowledgement
-                // message is filled with zeroes.
-                self.cec_client_signal.wait_for_event();
-                let mut notify_buffer = [0; NOTIFY_BUFFER_SIZE];
-                vchiq.dequeue_message(self.cec_client_handle, &mut notify_buffer)?;
-
-                Ok(())
-            })
-            .unwrap();
-        Ok(())
+    fn get_physical_address(&self) -> Result<PhysicalAddress, CECError> {
+        self.get_physical_addr().map_err(|e| e.into())
     }
 }

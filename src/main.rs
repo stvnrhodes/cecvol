@@ -158,6 +158,9 @@ async fn main() -> anyhow::Result<()> {
 
     debug!("Creating CEC connection...");
     let vchi = cec::vchi::HardwareInterface::init()?;
+    vchi.set_osd_name("cecvol")?;
+    // Using Raspberry Pi Foundation MAC address prefix
+    vchi.set_vendor_id(0xb837eb)?;
     let conn = web::Data::new(Mutex::new(cec::CEC::new(Box::new(vchi))));
 
     debug!("Starting server...");
