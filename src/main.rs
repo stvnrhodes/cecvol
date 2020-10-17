@@ -11,6 +11,7 @@ use actix_web::{get, middleware, post, web, App, HttpServer, Responder};
 use log::{debug, info};
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 #[derive(Deserialize)]
@@ -158,10 +159,13 @@ async fn main() -> anyhow::Result<()> {
 
     debug!("Creating CEC connection...");
     let vchi = cec::vchi::HardwareInterface::init()?;
-    vchi.set_osd_name("cecvol")?;
+    let osd_name = "cecvol";
     // Using Raspberry Pi Foundation MAC address prefix
-    vchi.set_vendor_id(0xb837eb)?;
-    let conn = web::Data::new(Mutex::new(cec::CEC::new(Box::new(vchi))));
+    let vendor_id = 0xb837eb;
+    vchi.set_osd_name(osd_name)?;
+    vchi.set_vendor_id(vendor_id)?;
+    let cec_conn = cec::CEC::new(Arc::new(vchi), osd_name, vendor_id);
+    let conn = web::Data::new(Mutex::new(cec_conn));
 
     debug!("Starting server...");
     HttpServer::new(move || {
@@ -178,3 +182,10 @@ async fn main() -> anyhow::Result<()> {
     .await?;
     Ok(())
 }
+
+// TODO
+// - remove sleep, replace with feedback
+// - respond to GiveDeviceVendorID, GiveOSDName, GiveDevicePowerStatus
+// -
+// - simple form for arbitrary commands
+// - oauth

@@ -1,12 +1,13 @@
 pub mod vchi;
 pub mod vchiq_ioctl;
 
-use log::debug;
+use log::{debug, info};
 use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
 use std::array::TryFromSliceError;
 use std::convert::{TryFrom, TryInto};
-use std::ffi::{CStr, FromBytesWithNulError};
 use std::fmt;
+use std::str;
+use std::sync::{Arc, Condvar, Mutex};
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
@@ -241,7 +242,7 @@ fn physical_address_from_bytes(b: &[u8]) -> Result<PhysicalAddress, TryFromSlice
     Ok(u16::from_be_bytes(b.try_into()?))
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum CECMessage {
     None,
     ImageViewOn,
@@ -342,6 +343,16 @@ impl CECMessage {
             | CECMessage::GiveDeviceVendorID => vec![],
         }
     }
+
+    fn payload(&self) -> Vec<u8> {
+        if *self == Self::None {
+            vec![]
+        } else {
+            let mut p = vec![self.get_opcode() as u8];
+            p.extend(self.get_parameters());
+            p
+        }
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -359,10 +370,10 @@ pub enum Error {
     #[error("Bad internal slicing")]
     BadInternalSlicing(#[from] TryFromSliceError),
     #[error("Invalid string")]
-    BadString(#[from] FromBytesWithNulError),
+    BadString(#[from] str::Utf8Error),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CECCommand {
     initiator: Option<LogicalAddress>,
     destination: LogicalAddress,
@@ -398,9 +409,7 @@ impl CECCommand {
                     .map_err(|_| Error::UnknownLogicalAddr)?,
             },
             Opcode::SetOSDName => CECMessage::SetOSDName {
-                name: CStr::from_bytes_with_nul(&input[2..])?
-                    .to_string_lossy()
-                    .into_owned(),
+                name: str::from_utf8(&input[2..])?.to_string(),
             },
             Opcode::ReportPowerStatus => CECMessage::ReportPowerStatus {
                 power_status: PowerStatus::try_from(input[2])?,
@@ -430,19 +439,63 @@ impl CECCommand {
     }
 }
 
-pub trait CECConnection {
+pub trait CECConnection: Sync + Send {
     fn transmit(&self, cmd: CECCommand) -> Result<(), CECError>;
     fn get_logical_address(&self) -> Result<LogicalAddress, CECError>;
     fn get_physical_address(&self) -> Result<PhysicalAddress, CECError>;
+    fn set_tx_callback(&self, func: Box<dyn FnMut(&CECCommand) + Send>);
+    fn set_rx_callback(&self, func: Box<dyn FnMut(&CECCommand) + Send>);
 }
 
 pub struct CEC {
-    conn: Box<dyn CECConnection + Send>,
+    conn: Arc<dyn CECConnection>,
+    tx_signal: Arc<(Mutex<Vec<CECCommand>>, Condvar)>,
 }
 
 impl CEC {
-    pub fn new(conn: Box<dyn CECConnection + Send>) -> Self {
-        CEC { conn }
+    pub fn new(conn: Arc<dyn CECConnection>, osd_name: &str, vendor_id: u32) -> Self {
+        let tx_signal = Arc::new((Mutex::new(vec![]), Condvar::new()));
+        let inner_tx_signal = tx_signal.clone();
+        let inner_conn = conn.clone();
+        let name = osd_name.to_string();
+        conn.set_rx_callback(Box::new(move |msg| {
+            info!("rx {:x?}", msg);
+            match msg.message {
+                CECMessage::GiveOSDName => inner_conn
+                    .transmit(CECCommand {
+                        initiator: None,
+                        destination: msg.initiator.unwrap(),
+                        message: CECMessage::SetOSDName { name: name.clone() },
+                    })
+                    .unwrap(),
+                CECMessage::GiveDeviceVendorID => inner_conn
+                    .transmit(CECCommand {
+                        initiator: None,
+                        destination: msg.initiator.unwrap(),
+                        message: CECMessage::DeviceVendorID {
+                            vendor_id: vendor_id,
+                        },
+                    })
+                    .unwrap(),
+                CECMessage::GiveDevicePowerStatus => inner_conn
+                    .transmit(CECCommand {
+                        initiator: None,
+                        destination: msg.initiator.unwrap(),
+                        message: CECMessage::ReportPowerStatus {
+                            power_status: PowerStatus::On,
+                        },
+                    })
+                    .unwrap(),
+                _ => {}
+            }
+        }));
+        conn.set_tx_callback(Box::new(move |msg| {
+            info!("tx {:x?}", msg);
+            let (lock, cvar) = &*inner_tx_signal;
+            lock.lock().unwrap().push(msg.clone());
+            cvar.notify_all();
+        }));
+        CEC { conn, tx_signal }
     }
 
     fn transmit(&self, destination: LogicalAddress, message: CECMessage) -> Result<(), CECError> {
@@ -452,7 +505,10 @@ impl CEC {
             destination: destination,
             message: message,
         })?;
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        let (lock, cvar) = &*self.tx_signal;
+        let _ = cvar
+            .wait_timeout(lock.lock().unwrap(), std::time::Duration::from_millis(1000))
+            .unwrap();
         Ok(())
     }
 
@@ -473,13 +529,11 @@ impl CEC {
     pub fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
         if relative_steps > 0 {
             for _ in 0..relative_steps {
-                // self.conn.volume_up(true)?
-                self.press_key(UserControl::VolumeUp)?
+                self.press_key(UserControl::VolumeUp)?;
             }
         } else if relative_steps < 0 {
             for _ in relative_steps..0 {
-                // self.conn.volume_down(true)?
-                self.press_key(UserControl::VolumeDown)?
+                self.press_key(UserControl::VolumeDown)?;
             }
         }
         Ok(())
@@ -490,7 +544,7 @@ impl CEC {
         } else {
             // self.conn.audio_unmute()?;
         }
-        Ok(())
+        self.press_key(UserControl::Mute)
     }
     pub fn on_off(&self, on: bool) -> Result<(), CECError> {
         if on {

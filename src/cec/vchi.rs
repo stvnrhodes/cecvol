@@ -8,7 +8,7 @@
 use crate::cec::vchiq_ioctl;
 use crate::cec::vchiq_ioctl::{Element, ServiceHandle, VersionNum};
 use crate::cec::{
-    CECCommand, CECConnection, CECError, CECMessage, DeviceType, LogicalAddress, PhysicalAddress,
+    CECCommand, CECConnection, CECError, DeviceType, LogicalAddress, PhysicalAddress,
 };
 use array_init::array_init;
 use core::ffi::c_void;
@@ -174,6 +174,10 @@ impl VchiqIoctls {
         retry(|| unsafe { vchiq_ioctl::release_service(self.fd(), handle as usize) }).map(|_| ())
     }
 
+    pub fn close_delivered(&mut self, handle: ServiceHandle) -> Result<(), nix::Error> {
+        retry(|| unsafe { vchiq_ioctl::close_delivered(self.fd(), handle as usize) }).map(|_| ())
+    }
+
     pub fn using_service<F, E>(&mut self, handle: ServiceHandle, func: F) -> Result<(), E>
     where
         F: FnOnce(&mut Self) -> Result<(), E>,
@@ -184,7 +188,15 @@ impl VchiqIoctls {
         self.release_service(handle)?;
         Ok(())
     }
-    // TODO(stvn): Implement await_completion through returning a closure?
+
+    pub fn await_completion_fn(
+        &self,
+    ) -> impl Fn(&mut vchiq_ioctl::AwaitCompletion) -> Result<usize, nix::Error> {
+        let fd = self.fd();
+        Box::new(move |args: &mut vchiq_ioctl::AwaitCompletion| {
+            Ok(retry(|| unsafe { vchiq_ioctl::await_completion(fd, args) })? as usize)
+        })
+    }
 }
 
 fn retry<F>(mut func: F) -> nix::Result<c_int>
@@ -414,6 +426,8 @@ impl SendMsgParam {
     }
 }
 
+type MessageCallback = Arc<Mutex<Option<Box<dyn FnMut(&CECCommand) + Send>>>>;
+
 #[derive(Debug)]
 struct ServiceUserdata<'a> {
     signal: &'a Signal,
@@ -430,6 +444,7 @@ pub struct HardwareInterface {
     tvservice_notify_handle: ServiceHandle,
     cec_client_handle: ServiceHandle,
     cec_notify_handle: ServiceHandle,
+
     // Signals to use for confirming message send.
     tvservice_client_signal: Arc<Signal>,
     cec_client_signal: Arc<Signal>,
@@ -438,6 +453,10 @@ pub struct HardwareInterface {
     tvservice_notify_thread: thread::JoinHandle<()>,
     cec_notify_thread: thread::JoinHandle<()>,
     completion_thread: thread::JoinHandle<()>,
+
+    // Callbacks to use for responding to incoming messages
+    cec_rx_callback: MessageCallback,
+    cec_tx_callback: MessageCallback,
 }
 
 impl HardwareInterface {
@@ -466,7 +485,7 @@ impl HardwareInterface {
 
         // Connect and spin up a thread
         vchiq.lock().unwrap().connect()?;
-        let fd = vchiq.lock().unwrap().fd();
+        let vchiq_completion = vchiq.clone();
         let completion_thread = thread::Builder::new()
             .name("VCHIQ completion".into())
             .spawn(move || {
@@ -482,30 +501,34 @@ impl HardwareInterface {
                     msgbufs: msgbufs.as_mut_ptr(),
                 };
 
+                let await_completion = vchiq_completion.lock().unwrap().await_completion_fn();
                 loop {
-                    // Fill up completion_data with allocated memory.
+                    // Fill up message buffer with allocated memory.
                     // This could potentionally leak memory.
                     args.msgbufcount = msgbufs.replenish(args.msgbufcount);
+                    let size = await_completion(&mut args).unwrap();
 
-                    // Continually await completion until no messages are received.
-                    // We intentionally avoid grabbing a mutex.
-                    let cnt = retry(|| unsafe { vchiq_ioctl::await_completion(fd, &mut args) })
-                        .unwrap() as usize;
-
-                    if cnt <= 0 {
-                        warn!("await_completion returned 0, no longer watching...");
-                        break;
-                    }
-                    for completion in completion_data[..cnt].iter() {
-                        // TODO(stvn): Change based on reason
-                        let userdata =
-                            unsafe { &mut *(completion.service_userdata as *mut ServiceUserdata) };
-                        userdata.signal.notify_one();
-                        if completion.reason == vchiq_ioctl::Reason::ServiceClosed
-                            && use_close_delivered
-                        {
-                            retry(|| unsafe { vchiq_ioctl::close_delivered(fd, userdata.handle) })
-                                .unwrap();
+                    for completion in completion_data[..size].iter() {
+                        match completion.reason {
+                            vchiq_ioctl::Reason::MessageAvailable
+                            | vchiq_ioctl::Reason::ServiceClosed => {
+                                let userdata = unsafe {
+                                    &mut *(completion.service_userdata as *mut ServiceUserdata)
+                                };
+                                userdata.signal.notify_one();
+                                if completion.reason == vchiq_ioctl::Reason::ServiceClosed
+                                    && use_close_delivered
+                                {
+                                    vchiq_completion
+                                        .lock()
+                                        .unwrap()
+                                        .close_delivered(userdata.handle)
+                                        .unwrap();
+                                }
+                            }
+                            _ => {
+                                debug!("{:?}", completion.reason);
+                            }
                         }
                     }
                 }
@@ -539,7 +562,7 @@ impl HardwareInterface {
         )?;
 
         // Spawn notification threads now that we have the handles
-        let tvservice_vchiq = Arc::clone(&vchiq);
+        let tvservice_vchiq = vchiq.clone();
         let tvservice_notify_thread = thread::Builder::new()
             .name("TVService Notify".into())
             .spawn(move || {
@@ -581,7 +604,11 @@ impl HardwareInterface {
                     }
                 }
             })?;
-        let cec_vchiq = Arc::clone(&vchiq);
+        let cec_vchiq = vchiq.clone();
+        let cec_rx_callback: MessageCallback = Arc::new(Mutex::new(None));
+        let cec_rx_callback_copy = cec_rx_callback.clone();
+        let cec_tx_callback: MessageCallback = Arc::new(Mutex::new(None));
+        let cec_tx_callback_copy = cec_tx_callback.clone();
         let cec_notify_thread =
             thread::Builder::new()
                 .name("CEC Notify".into())
@@ -619,20 +646,37 @@ impl HardwareInterface {
                                         u16::from_be_bytes(params[4..6].try_into().unwrap());
                                     info!("logical: {:?}, physical: {:x?}", logical, physical);
                                 }
-                                CECReason::Rx
-                                | CECReason::Tx
-                                | CECReason::ButtonPressed
+                                CECReason::Rx => match CECCommand::from_raw(params) {
+                                    Ok(cmd) => match &mut *cec_rx_callback.lock().unwrap() {
+                                        Some(func) => func(&cmd),
+                                        None => {
+                                            debug!("{:?} {:x?}", reason, cmd);
+                                        }
+                                    },
+                                    Err(_) => {
+                                        info!("{:?} {:02x?}", reason, params);
+                                    }
+                                },
+                                CECReason::Tx => match CECCommand::from_raw(params) {
+                                    Ok(cmd) => match &mut *cec_tx_callback.lock().unwrap() {
+                                        Some(func) => func(&cmd),
+                                        None => {
+                                            debug!("{:?} {:x?}", reason, cmd);
+                                        }
+                                    },
+                                    Err(_) => {
+                                        info!("{:?} {:02x?}", reason, params);
+                                    }
+                                },
+                                CECReason::ButtonPressed
                                 | CECReason::ButtonReleased
                                 | CECReason::RemotePressed
-                                | CECReason::RemoteReleased => {
-                                    let cmd = CECCommand::from_raw(params);
-                                    match cmd {
-                                        Ok(c) => info!("{:?} {:x?}", reason, c),
-                                        Err(_) => {
-                                            info!("{:?} {:02x?}", reason, params);
-                                        }
+                                | CECReason::RemoteReleased => match CECCommand::from_raw(params) {
+                                    Ok(c) => info!("{:?} {:x?}", reason, c),
+                                    Err(_) => {
+                                        info!("{:?} {:02x?}", reason, params);
                                     }
-                                }
+                                },
                                 CECReason::Topology => {
                                     info!("devices present: {:02x?}", &params[0..2])
                                 }
@@ -672,27 +716,11 @@ impl HardwareInterface {
             cec_client_signal: cec_client_signal,
             cec_notify_thread: cec_notify_thread,
             completion_thread: completion_thread,
+            cec_rx_callback: cec_rx_callback_copy,
+            cec_tx_callback: cec_tx_callback_copy,
         })
     }
 
-    // Starts the command service on each connection, causing INIT messages to
-    // be pinged back and forth
-
-    // if poll(LA same), vc_cec_release_logical_address and disable callbacks
-    // vc_cec_set_logical_address
-    // vc_cec_get_physical_address
-
-    // vc_cec_set_passive
-    // vc_cec_register_callback
-    //vc_tv_register_callback
-
-    //vc_cec_poll_address
-    // handle POLL (msg like '11') in a special way - the way it was
-    // originally designed by BCM, expected to happen and documented
-    // in API docs (/opt/vc/includes)
-    // due to often (more than 20% test cases - CEC bus with 8 devices)
-    // irregularities on returned status, repeat until we get SAME
-    // result twice in a row
     fn send_cec_command_with_reply(&self, elements: &[Element]) -> Result<Vec<u8>, ServiceError> {
         let mut vec = vec![];
         self.vchiq
@@ -749,10 +777,12 @@ impl HardwareInterface {
         Ok(u16::from_le_bytes(resp[0..2].try_into()?))
     }
 
+    #[allow(dead_code)]
     pub fn alloc_logical_addr(&self) -> Result<(), ServiceError> {
         self.send_cec_command_without_reply(&[Element::new(&CECServiceCommand::AllocLogicalAddr)])
     }
 
+    #[allow(dead_code)]
     pub fn release_logical_address(&self) -> Result<(), ServiceError> {
         self.send_cec_command_without_reply(&[Element::new(&CECServiceCommand::ReleaseLogicalAddr)])
     }
@@ -774,6 +804,7 @@ impl HardwareInterface {
         ])
     }
 
+    #[allow(dead_code)]
     pub fn get_vendor_id(&self, addr: LogicalAddress) -> Result<u32, ServiceError> {
         let addr_bytes = (addr as u32).to_le_bytes();
         let resp = self.send_cec_command_with_reply(&[
@@ -788,6 +819,7 @@ impl HardwareInterface {
     //  *       when CEC is running in passive mode. The host can
     //  *       only call this function during logical address allocation stage.
     // address is free if error code is VC_CEC_ERROR_NO_ACK
+    #[allow(dead_code)]
     pub fn poll_address(&self, addr: LogicalAddress) -> Result<(), ServiceError> {
         let addr_bytes = (addr as u32).to_le_bytes();
         self.send_cec_command(&[
@@ -801,6 +833,7 @@ impl HardwareInterface {
     // *       responsibility of the host to make sure the logical address
     // *       is actually free (see vc_cec_poll_address). Physical address used
     // *       will be what is read from EDID and cannot be set.
+    #[allow(dead_code)]
     pub fn set_logical_address(
         &self,
         addr: LogicalAddress,
@@ -818,6 +851,7 @@ impl HardwareInterface {
         ])
     }
 
+    #[allow(dead_code)]
     pub fn set_passive(&self, enabled: bool) -> Result<(), ServiceError> {
         let param = (enabled as u32).to_le();
         self.send_cec_command(&[
@@ -828,16 +862,13 @@ impl HardwareInterface {
 }
 impl CECConnection for HardwareInterface {
     fn transmit(&self, cmd: CECCommand) -> Result<(), CECError> {
-        let payload = if cmd.message == CECMessage::None {
-            vec![]
-        } else {
-            let mut p = vec![cmd.message.get_opcode() as u8];
-            p.extend(cmd.message.get_parameters());
-            p
-        };
         self.send_cec_command(&[
             Element::new(&CECServiceCommand::SendMsg),
-            Element::new(&SendMsgParam::new(cmd.destination, &payload, true)),
+            Element::new(&SendMsgParam::new(
+                cmd.destination,
+                &cmd.message.payload(),
+                true,
+            )),
         ])
         .map_err(|e| e.into())
     }
@@ -848,5 +879,12 @@ impl CECConnection for HardwareInterface {
 
     fn get_physical_address(&self) -> Result<PhysicalAddress, CECError> {
         self.get_physical_addr().map_err(|e| e.into())
+    }
+
+    fn set_rx_callback(&self, func: Box<dyn FnMut(&CECCommand) + Send>) {
+        *self.cec_rx_callback.lock().unwrap() = Some(func)
+    }
+    fn set_tx_callback(&self, func: Box<dyn FnMut(&CECCommand) + Send>) {
+        *self.cec_tx_callback.lock().unwrap() = Some(func)
     }
 }

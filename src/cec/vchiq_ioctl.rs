@@ -10,6 +10,7 @@ use core::ffi::c_void;
 use core::mem::size_of;
 use nix::{ioctl_none, ioctl_readwrite, ioctl_write_ptr};
 use num_enum::TryFromPrimitive;
+use std::ptr;
 
 // The ioctls for vchiq incorrectly take an input when specifying ioctl_none,
 // so we create our own ioctl_none function that's equivalent to ioctl_write_int.
@@ -163,6 +164,16 @@ pub struct CompletionData {
     pub header: *mut Header,
     pub service_userdata: *mut c_void,
     pub bulk_userdata: *mut c_void,
+}
+impl Default for CompletionData {
+    fn default() -> Self {
+        CompletionData {
+            reason: Reason::ServiceOpened,
+            header: ptr::null_mut(),
+            service_userdata: ptr::null_mut(),
+            bulk_userdata: ptr::null_mut(),
+        }
+    }
 }
 
 #[repr(C)]
