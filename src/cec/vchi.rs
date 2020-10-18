@@ -218,7 +218,6 @@ where
  */
 #[repr(u16)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
-#[allow(dead_code)]
 enum HDMIReason {
     Unknown,
     Unplugged = 1 << 0,       /*<HDMI cable is detached */
@@ -237,7 +236,6 @@ enum HDMIReason {
  */
 #[repr(u16)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
-#[allow(dead_code)]
 enum CECReason {
     None = 0,                  //Reserved - NOT TO BE USED
     Tx = 1 << 0,               /*<A message has been transmitted */
@@ -641,7 +639,7 @@ impl HardwareInterface {
                             match reason {
                                 CECReason::LogicalAddr => {
                                     let logical = LogicalAddress::try_from(params[0])
-                                        .unwrap_or(LogicalAddress::Unknown);
+                                        .unwrap_or(LogicalAddress::Broadcast);
                                     let physical =
                                         u16::from_be_bytes(params[4..6].try_into().unwrap());
                                     info!("logical: {:?}, physical: {:x?}", logical, physical);
@@ -682,7 +680,7 @@ impl HardwareInterface {
                                 }
                                 CECReason::LogicalAddrLost => {
                                     let logical = LogicalAddress::try_from(params[0])
-                                        .unwrap_or(LogicalAddress::Unknown);
+                                        .unwrap_or(LogicalAddress::Broadcast);
                                     let physical =
                                         u16::from_be_bytes(params[4..6].try_into().unwrap());
                                     info!(
@@ -777,7 +775,6 @@ impl HardwareInterface {
         Ok(u16::from_le_bytes(resp[0..2].try_into()?))
     }
 
-    #[allow(dead_code)]
     pub fn alloc_logical_addr(&self) -> Result<(), ServiceError> {
         self.send_cec_command_without_reply(&[Element::new(&CECServiceCommand::AllocLogicalAddr)])
     }

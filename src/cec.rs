@@ -11,7 +11,6 @@ use std::sync::{Arc, Condvar, Mutex};
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
-#[allow(dead_code)]
 pub enum PowerStatus {
     On = 0,
     Standby = 1,
@@ -22,7 +21,14 @@ pub enum PowerStatus {
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
-#[allow(dead_code)]
+pub enum DeckStatus {
+    On = 1,
+    Off = 2,
+    Once = 3,
+}
+
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
 pub enum AbortReason {
     UnrecognisedOpcode = 0,
     WrongMode = 1,
@@ -34,7 +40,6 @@ pub enum AbortReason {
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
-#[allow(dead_code)]
 pub enum Opcode {
     FeatureAbort = 0x00,
     ImageViewOn = 0x04,
@@ -111,9 +116,7 @@ pub enum Opcode {
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
-#[allow(dead_code)]
 pub enum LogicalAddress {
-    Unknown = 0xff,
     TV = 0,
     RecordingDevice1 = 1,
     RecordingDevice2 = 2,
@@ -132,6 +135,25 @@ pub enum LogicalAddress {
     Broadcast = 15,
 }
 
+impl LogicalAddress {
+    pub fn to_device_type(&self) -> DeviceType {
+        match self {
+            Self::TV => DeviceType::TV,
+            Self::AudioSystem => DeviceType::AudioSystem,
+            Self::RecordingDevice1 | Self::RecordingDevice2 | Self::RecordingDevice3 => {
+                DeviceType::RecordingDevice
+            }
+            Self::PlaybackDevice1 | Self::PlaybackDevice2 | Self::PlaybackDevice3 => {
+                DeviceType::PlaybackDevice
+            }
+            Self::Tuner1 | Self::Tuner2 | Self::Tuner3 | Self::Tuner4 => DeviceType::Tuner,
+            Self::Reserved1 | Self::Reserved2 | Self::FreeUse | Self::Broadcast => {
+                DeviceType::Reserved
+            }
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
 pub enum DeviceType {
@@ -147,7 +169,6 @@ pub enum DeviceType {
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
-#[allow(dead_code)]
 pub enum UserControl {
     Select = 0x00,
     Up = 0x01,
@@ -250,7 +271,6 @@ fn physical_address_from_bytes(b: &[u8]) -> Result<PhysicalAddress, TryFromSlice
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CECMessage {
-    None,
     FeatureAbort {
         feature_opcode: Opcode,
         abort_reason: AbortReason,
@@ -281,6 +301,10 @@ pub enum CECMessage {
     DeviceVendorID {
         vendor_id: u32,
     },
+    GiveDeckStatus {
+        status_request: DeckStatus,
+    },
+    GiveAudioStatus,
     RoutingChange {
         original_address: PhysicalAddress,
         new_address: PhysicalAddress,
@@ -289,12 +313,14 @@ pub enum CECMessage {
         user_control_code: UserControl,
     },
     UserControlReleased,
+    VendorCommand {
+        vendor_data: Vec<u8>,
+    },
 }
 
 impl CECMessage {
     fn get_opcode(&self) -> Opcode {
         match &self {
-            CECMessage::None => Opcode::FeatureAbort,
             CECMessage::FeatureAbort { .. } => Opcode::FeatureAbort,
             CECMessage::ImageViewOn => Opcode::ImageViewOn,
             CECMessage::Standby => Opcode::Standby,
@@ -309,9 +335,12 @@ impl CECMessage {
             CECMessage::ReportPowerStatus { .. } => Opcode::ReportPowerStatus,
             CECMessage::GiveDeviceVendorID => Opcode::GiveDeviceVendorID,
             CECMessage::DeviceVendorID { .. } => Opcode::DeviceVendorID,
+            CECMessage::GiveAudioStatus => Opcode::GiveAudioStatus,
             CECMessage::RoutingChange { .. } => Opcode::RoutingChange,
             CECMessage::UserControlPressed { .. } => Opcode::UserControlPressed,
             CECMessage::UserControlReleased => Opcode::UserControlReleased,
+            CECMessage::VendorCommand { .. } => Opcode::VendorCommand,
+            CECMessage::GiveDeckStatus { .. } => Opcode::GiveDeckStatus,
         }
     }
     fn get_parameters(&self) -> Vec<u8> {
@@ -347,26 +376,24 @@ impl CECMessage {
                 params
             }
             CECMessage::UserControlPressed { user_control_code } => vec![*user_control_code as u8],
-            CECMessage::None
-            | CECMessage::ImageViewOn
+            CECMessage::VendorCommand { vendor_data } => vendor_data.to_vec(),
+            CECMessage::GiveDeckStatus { status_request } => vec![*status_request as u8],
+            CECMessage::ImageViewOn
             | CECMessage::Standby
             | CECMessage::RequestActiveSource
             | CECMessage::GivePhysicalAddress
             | CECMessage::GiveOSDName
             | CECMessage::UserControlReleased
             | CECMessage::GiveDevicePowerStatus
-            | CECMessage::GiveDeviceVendorID => vec![],
+            | CECMessage::GiveDeviceVendorID
+            | CECMessage::GiveAudioStatus => vec![],
         }
     }
 
     fn payload(&self) -> Vec<u8> {
-        if *self == Self::None {
-            vec![]
-        } else {
-            let mut p = vec![self.get_opcode() as u8];
-            p.extend(self.get_parameters());
-            p
-        }
+        let mut p = vec![self.get_opcode() as u8];
+        p.extend(self.get_parameters());
+        p
     }
 }
 
@@ -388,6 +415,8 @@ pub enum Error {
     BadUserControlCode(#[from] TryFromPrimitiveError<UserControl>),
     #[error("Command has invalid device type")]
     BadDeviceType(#[from] TryFromPrimitiveError<DeviceType>),
+    #[error("Command has invalid device type")]
+    BadDeckStatus(#[from] TryFromPrimitiveError<DeckStatus>),
     #[error("Bad internal slicing")]
     BadInternalSlicing(#[from] TryFromSliceError),
     #[error("Command has invalid string")]
@@ -418,8 +447,13 @@ impl CECCommand {
             | Opcode::RequestActiveSource
             | Opcode::GiveOSDName
             | Opcode::GiveDeviceVendorID
+            | Opcode::GiveAudioStatus
             | Opcode::UserControlReleased => 2,
-            Opcode::SetOSDName | Opcode::ReportPowerStatus | Opcode::UserControlPressed => 3,
+            Opcode::SetOSDName
+            | Opcode::GiveDeckStatus
+            | Opcode::ReportPowerStatus
+            | Opcode::UserControlPressed
+            | Opcode::VendorCommand => 3,
             Opcode::ActiveSource | Opcode::SetStreamPath | Opcode::FeatureAbort => 4,
             Opcode::ReportPhysicalAddress | Opcode::DeviceVendorID => 5,
             Opcode::RoutingChange => 6,
@@ -439,6 +473,9 @@ impl CECCommand {
             Opcode::RequestActiveSource => CECMessage::RequestActiveSource,
             Opcode::GiveOSDName => CECMessage::GiveOSDName,
             Opcode::GiveDevicePowerStatus => CECMessage::GiveDevicePowerStatus,
+            Opcode::GiveDeckStatus => CECMessage::GiveDeckStatus {
+                status_request: DeckStatus::try_from(input[2])?,
+            },
             Opcode::ActiveSource => CECMessage::ActiveSource {
                 physical_address: physical_address_from_bytes(&input[2..4])?,
             },
@@ -459,6 +496,7 @@ impl CECCommand {
             Opcode::DeviceVendorID => CECMessage::DeviceVendorID {
                 vendor_id: (input[2] as u32) << 16 | (input[3] as u32) << 8 | (input[4] as u32),
             },
+            Opcode::GiveAudioStatus => CECMessage::GiveAudioStatus,
             Opcode::RoutingChange => CECMessage::RoutingChange {
                 original_address: physical_address_from_bytes(&input[2..4])?,
                 new_address: physical_address_from_bytes(&input[4..6])?,
@@ -467,6 +505,9 @@ impl CECCommand {
                 user_control_code: UserControl::try_from(input[2])?,
             },
             Opcode::UserControlReleased => CECMessage::UserControlReleased,
+            Opcode::VendorCommand => CECMessage::VendorCommand {
+                vendor_data: input[2..].to_vec(),
+            },
             _ => return Err(Error::OpcodeNotImplemented),
         };
         Ok(CECCommand {
@@ -487,18 +528,18 @@ pub trait CECConnection: Sync + Send {
 
 pub struct CEC {
     conn: Arc<dyn CECConnection>,
-    tx_signal: Arc<(Mutex<Vec<CECCommand>>, Condvar)>,
+    tx_signal: Arc<(Mutex<Option<CECCommand>>, Condvar)>,
 }
 
 impl CEC {
     pub fn new(conn: Arc<dyn CECConnection>, osd_name: &str, vendor_id: u32) -> Self {
-        let tx_signal = Arc::new((Mutex::new(vec![]), Condvar::new()));
+        let tx_signal = Arc::new((Mutex::new(None), Condvar::new()));
         let inner_tx_signal = tx_signal.clone();
         let inner_conn = conn.clone();
         let name = osd_name.to_string();
         conn.set_rx_callback(Box::new(move |msg| {
             info!("rx {:x?}", msg);
-            match msg.message {
+            match &msg.message {
                 CECMessage::GiveOSDName => inner_conn
                     .transmit(CECCommand {
                         initiator: None,
@@ -524,20 +565,69 @@ impl CEC {
                         },
                     })
                     .unwrap(),
+                CECMessage::GivePhysicalAddress => inner_conn
+                    .transmit(CECCommand {
+                        initiator: None,
+                        destination: msg.initiator.unwrap(),
+                        message: CECMessage::ReportPhysicalAddress {
+                            physical_address: inner_conn.get_physical_address().unwrap(),
+                            device_type: inner_conn.get_logical_address().unwrap().to_device_type(),
+                        },
+                    })
+                    .unwrap(),
+                CECMessage::VendorCommand { vendor_data } => {
+                    // See https://github.com/Pulse-Eight/libcec/blob/master/src/libcec/implementations/SLCommandHandler.cpp
+                    match vendor_data[0] {
+                        1 => {
+                            inner_conn
+                                .transmit(CECCommand {
+                                    initiator: None,
+                                    destination: msg.initiator.unwrap(),
+                                    message: CECMessage::VendorCommand {
+                                        vendor_data: vec![0x02, 0x05],
+                                    },
+                                })
+                                .unwrap();
+                        }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }));
         conn.set_tx_callback(Box::new(move |msg| {
             info!("tx {:x?}", msg);
             let (lock, cvar) = &*inner_tx_signal;
-            lock.lock().unwrap().push(msg.clone());
+            *lock.lock().unwrap() = Some(msg.clone());
             cvar.notify_all();
         }));
         CEC { conn, tx_signal }
     }
 
+    pub fn poll_all(&self) -> Result<(), CECError> {
+        for &addr in &[
+            LogicalAddress::TV,
+            LogicalAddress::AudioSystem,
+            LogicalAddress::PlaybackDevice1,
+            LogicalAddress::PlaybackDevice2,
+            LogicalAddress::PlaybackDevice3,
+            LogicalAddress::RecordingDevice1,
+            LogicalAddress::RecordingDevice2,
+            LogicalAddress::RecordingDevice3,
+            LogicalAddress::Tuner1,
+            LogicalAddress::Tuner2,
+            LogicalAddress::Tuner3,
+            LogicalAddress::Tuner4,
+        ] {
+            self.transmit(addr, CECMessage::GiveOSDName)?;
+            self.transmit(addr, CECMessage::GivePhysicalAddress)?;
+        }
+        Ok(())
+    }
+
     fn transmit(&self, destination: LogicalAddress, message: CECMessage) -> Result<(), CECError> {
-        debug!("sending {:?} to {:?}", message, destination);
+        debug!("sending {:x?} to {:?}", message, destination);
+        let payload = message.payload();
         self.conn.transmit(CECCommand {
             initiator: None,
             destination: destination,
@@ -545,7 +635,16 @@ impl CEC {
         })?;
         let (lock, cvar) = &*self.tx_signal;
         let _ = cvar
-            .wait_timeout(lock.lock().unwrap(), std::time::Duration::from_millis(1000))
+            .wait_timeout_while(
+                lock.lock().unwrap(),
+                std::time::Duration::from_millis(100),
+                |tx| {
+                    if let Some(CECCommand { message: sent, .. }) = tx {
+                        return !sent.payload().eq(&payload);
+                    }
+                    true
+                },
+            )
             .unwrap();
         Ok(())
     }
@@ -593,7 +692,7 @@ impl CEC {
     }
     pub fn set_input(&self, new_input: String) -> Result<(), CECError> {
         // TODO(stvn): Fix this assumption!
-        let old_addr = self.conn.get_physical_address()?;
+        // let old_addr = self.conn.get_physical_address()?;
         let new_addr = match new_input.as_str() {
             "1" => 0x1000,
             "2" => 0x2000,
@@ -607,16 +706,16 @@ impl CEC {
         })?;
         self.broadcast(CECMessage::ActiveSource {
             physical_address: new_addr,
-        })?;
-        self.broadcast(CECMessage::ReportPhysicalAddress {
-            physical_address: old_addr,
-            device_type: DeviceType::RecordingDevice,
         })
+        // self.broadcast(CECMessage::ReportPhysicalAddress {
+        //     physical_address: old_addr,
+        //     device_type: DeviceType::RecordingDevice,
+        // })
     }
 
     pub fn transmit_raw(&self, input: &[u8]) -> Result<(), CECError> {
         let cmd = CECCommand::from_raw(input)?;
-        debug!("sending {:?}", cmd);
+        debug!("sending {:x?}", cmd);
         self.conn.transmit(cmd)?;
         Ok(())
     }

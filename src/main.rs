@@ -8,11 +8,13 @@ use action::devices::{
 };
 use actix_http::Response;
 use actix_web::{get, middleware, post, web, App, HttpServer, Responder};
-use log::{debug, info};
+use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 #[derive(Deserialize)]
 struct AuthInfo {
@@ -181,13 +183,27 @@ async fn main() -> anyhow::Result<()> {
     debug!("Creating CEC connection...");
     let vchi = cec::vchi::HardwareInterface::init()?;
     let osd_name = "cecvol";
-    // Using Raspberry Pi Foundation MAC address prefix
-    let vendor_id = 0xb837eb;
+    // LG's vendor code seems to be required for UserControl commands to work.
+    let vendor_id = 0x00e091;
     vchi.set_osd_name(osd_name)?;
     vchi.set_vendor_id(vendor_id)?;
+
+    if vchi.get_logical_addr()? == cec::LogicalAddress::Broadcast
+        && vchi.get_physical_addr()? != 0xffff
+    {
+        vchi.alloc_logical_addr()?;
+    }
     let cec_conn = cec::CEC::new(Arc::new(vchi), osd_name, vendor_id);
     let conn = web::Data::new(Mutex::new(cec_conn));
 
+    let thread_conn = conn.clone();
+    thread::spawn(move || {
+        match thread_conn.lock().unwrap().poll_all() {
+            Ok(()) => {}
+            Err(e) => error!("{}", e),
+        }
+        thread::sleep(Duration::from_secs(100));
+    });
     debug!("Starting server...");
     HttpServer::new(move || {
         App::new()
@@ -206,8 +222,6 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // TODO
-// - remove sleep, replace with feedback
-// - respond to GiveDeviceVendorID, GiveOSDName, GiveDevicePowerStatus
-// -
-// - simple form for arbitrary commands
+// - internally record device status
+// - maybe poll on devices present
 // - oauth
