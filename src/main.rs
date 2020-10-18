@@ -9,7 +9,7 @@ use action::devices::{
 use actix_http::Response;
 use actix_web::{get, middleware, post, web, App, HttpServer, Responder};
 use log::{debug, info};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -151,6 +151,27 @@ async fn fulfillment(
     }))
 }
 
+#[derive(Deserialize)]
+pub struct ExecRequest {
+    cmd: String,
+}
+#[derive(Serialize)]
+pub struct ExecResponse {}
+
+#[post("/cecexec")]
+async fn cecexec(
+    req: web::Json<ExecRequest>,
+    cec: web::Data<Mutex<cec::CEC>>,
+) -> Result<web::Json<ExecResponse>, actix_web::Error> {
+    let cmd: Vec<u8> = req
+        .cmd
+        .split(":")
+        .map(|s| u8::from_str_radix(s, 16).unwrap_or(0))
+        .collect();
+    cec.lock().unwrap().transmit_raw(&cmd)?;
+    Ok(web::Json(ExecResponse {}))
+}
+
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug"))
@@ -174,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
             .wrap(middleware::Logger::default())
             .wrap(middleware::Compress::default())
             .service(fulfillment)
+            .service(cecexec)
             .service(auth)
             .route("/", web::get().to(index))
     })

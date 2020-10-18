@@ -32,8 +32,7 @@
                         }
                     }]
                 })
-            }
-            )
+            })
                 .then(response => response.json())
                 .then(data => console.log(data));
         }
@@ -68,6 +67,26 @@
                     'on': on
                 }
             })
+        }
+        function executeArbitraryCommand(cmd) {
+            let val = document.getElementById("cec").value;
+            fetch('/cecexec', {
+                method: 'POST',
+                mode: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ 'cmd': val })
+            })
+                .then(response => {
+                    document.getElementById('output').text_content = response.status;
+                    return response.text();
+                })
+                .then(text => {
+                    document.getElementById('output').text_content += text
+                }).catch((e) => {
+                    document.getElementById('output').text_content += e.message
+                });
         }
 
         document.onkeydown = function (e) {
@@ -104,6 +123,18 @@
         <button onclick="setInput('3')">hdmi3</button>
         <button onclick="setInput('4')">hdmi4</button>
     </p>
+    <p>
+        <input type="text" id="cec">
+        <button onclick="executeArbitraryCommand()">send</button>
+    </p>
+    <p id="output"></p>
+    <script>
+        document.getElementById('cec').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                executeArbitraryCommand();
+            }
+        });
+    </script>
 </body>
 
 </html>

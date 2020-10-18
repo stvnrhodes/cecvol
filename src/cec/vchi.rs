@@ -597,7 +597,7 @@ impl HardwareInterface {
                         let params = &notify_buffer[4..12];
                         debug!("tv_notification {:?} {:02x?}", reason, params);
 
-                        // TODO(stvn): Add callbackS
+                        // TODO(stvn): Add callbacks
                         if num_bytes == TVSERVICE_NOTIFY_SIZE {
                             break;
                         }
@@ -758,7 +758,7 @@ impl HardwareInterface {
             .lock()
             .unwrap()
             .using_service(self.cec_client_handle, |vchiq| {
-                // Send the command.
+                // Send the command. We don't expect any acknowledgement.
                 let msg = vchiq_ioctl::QueueMessage::new(self.cec_client_handle, elements);
                 ServiceError::from_vchiq_status(vchiq.queue_message(msg)?)?;
                 Ok(())
@@ -814,11 +814,12 @@ impl HardwareInterface {
         Ok(u32::from_le_bytes(resp[..4].try_into()?))
     }
 
-    //     *       Sets and polls a particular address to find out
-    //  *       its availability in the CEC network. Only available
-    //  *       when CEC is running in passive mode. The host can
-    //  *       only call this function during logical address allocation stage.
-    // address is free if error code is VC_CEC_ERROR_NO_ACK
+    /// Sets and polls a particular address to find out its availability in the
+    /// CEC network.
+    ///
+    /// Only available when CEC is running in passive mode. The host can
+    /// only call this function during logical address allocation stage.
+    /// address is free if error code is VC_CEC_ERROR_NO_ACK
     #[allow(dead_code)]
     pub fn poll_address(&self, addr: LogicalAddress) -> Result<(), ServiceError> {
         let addr_bytes = (addr as u32).to_le_bytes();
@@ -828,11 +829,12 @@ impl HardwareInterface {
         ])
     }
 
-    // *       sets the logical address, device type and vendor ID to be in use.
-    // *       Only available when CEC is running in passive mode. It is the
-    // *       responsibility of the host to make sure the logical address
-    // *       is actually free (see vc_cec_poll_address). Physical address used
-    // *       will be what is read from EDID and cannot be set.
+    /// Sets the logical address, device type and vendor ID to be in use.
+    ///
+    /// Only available when CEC is running in passive mode. It is the
+    /// responsibility of the host to make sure the logical address
+    /// is actually free (see vc_cec_poll_address). Physical address used
+    /// will be what is read from EDID and cannot be set.
     #[allow(dead_code)]
     pub fn set_logical_address(
         &self,
