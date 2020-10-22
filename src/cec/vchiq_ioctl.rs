@@ -17,10 +17,10 @@ use std::ptr;
 macro_rules! ioctl_none_write_int {
     ($(#[$attr:meta])* $name:ident, $ioty:expr, $nr:expr) => (
         $(#[$attr])*
-        pub unsafe fn $name(fd: libc::c_int,
+        pub unsafe fn $name(fd:  std::os::raw::c_int,
                             data:usize)
-                            -> nix::Result<libc::c_int> {
-            nix::convert_ioctl_res!(libc::ioctl(fd, nix::request_code_none!($ioty, $nr) as nix::sys::ioctl::ioctl_num_type, data))
+                            -> nix::Result<std::os::raw::c_int> {
+            nix::convert_ioctl_res!(nix::libc::ioctl(fd, nix::request_code_none!($ioty, $nr) as nix::sys::ioctl::ioctl_num_type, data))
         }
     )
 }
@@ -102,7 +102,7 @@ pub type Callback = extern "C" fn(Reason, *const Header, ServiceHandle, *mut c_v
 #[derive(Debug)]
 pub struct ServiceParams {
     pub fourcc: u32,
-    pub callback: Option<Callback>,
+    pub callback: Callback,
     pub userdata: *const c_void,
     pub version: VersionNum,     /* Increment for non-trivial changes */
     pub version_min: VersionNum, /* Update for incompatible changes */
@@ -158,7 +158,7 @@ pub struct QueueBulkTransfer {
 }
 
 #[repr(C)]
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct CompletionData {
     pub reason: Reason,
     pub header: *mut Header,

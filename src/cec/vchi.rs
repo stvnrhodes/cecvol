@@ -10,13 +10,12 @@ use crate::cec::vchiq_ioctl::{Element, ServiceHandle, VersionNum};
 use crate::cec::{
     CECCommand, CECConnection, CECError, DeviceType, LogicalAddress, PhysicalAddress,
 };
-use array_init::array_init;
-use core::ffi::c_void;
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
 use nix::errno::Errno;
 use num_enum::TryFromPrimitive;
 use std::convert::{TryFrom, TryInto};
+use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::mem::{size_of, zeroed};
 use std::os::raw::c_int;
@@ -85,7 +84,15 @@ lazy_static! {
     static ref INITIALIZED: Mutex<bool> = Mutex::new(false);
 }
 
-// https://rust-lang.github.io/unsafe-code-guidelines/layout/function-pointers.html
+extern "C" fn service_callback(
+    reason: vchiq_ioctl::Reason,
+    header: *const vchiq_ioctl::Header,
+    handle: ServiceHandle,
+    userdata: *mut c_void,
+) -> vchiq_ioctl::Status {
+    warn!("{:?}, {:?}, {:?}, {:?}", reason, header, handle, userdata);
+    vchiq_ioctl::Status::Success
+}
 
 struct VchiqIoctls {
     vchiq: File,
@@ -133,7 +140,7 @@ impl VchiqIoctls {
         let mut service = vchiq_ioctl::CreateService {
             service_params: vchiq_ioctl::ServiceParams {
                 fourcc: client.into(),
-                callback: None,
+                callback: service_callback,
                 userdata: Box::into_raw(userdata) as *mut c_void,
                 version: vc_version,
                 version_min: vc_version,
@@ -300,7 +307,7 @@ impl Signal {
 struct MsgbufArray([*mut c_void; 8]);
 impl MsgbufArray {
     fn new() -> MsgbufArray {
-        MsgbufArray(array_init(|_: usize| ptr::null_mut()))
+        MsgbufArray([ptr::null_mut(); 8])
     }
     fn replenish(&mut self, remaining_available: usize) -> usize {
         if remaining_available < self.len() {
@@ -489,7 +496,7 @@ impl HardwareInterface {
             .spawn(move || {
                 // Set up memory for ioctl output
                 let mut completion_data: [vchiq_ioctl::CompletionData; 8] =
-                    array_init(|_: usize| unsafe { zeroed() });
+                    [unsafe { zeroed() }; 8];
                 let mut msgbufs = MsgbufArray::new();
                 let mut args = vchiq_ioctl::AwaitCompletion {
                     count: completion_data.len(),

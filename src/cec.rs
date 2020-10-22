@@ -4,10 +4,13 @@ pub mod vchiq_ioctl;
 use log::{debug, info};
 use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
 use std::array::TryFromSliceError;
+use std::cmp;
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::str;
 use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, TryFromPrimitive)]
@@ -245,14 +248,17 @@ pub enum UserControl {
 
 #[derive(Debug)]
 pub enum CECError {
+    UnknownInputDevice(String),
     ParsingError(Error),
-    Other(Box<dyn std::error::Error>),
+    Other(Box<dyn std::error::Error + Sync + Send>),
 }
 
+impl std::error::Error for CECError {}
 impl actix_http::ResponseError for CECError {}
 impl fmt::Display for CECError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::UnknownInputDevice(err) => write!(f, "Unknown input device: {}", err),
             Self::ParsingError(err) => write!(f, "Parsing error: {}", err),
             Self::Other(err) => write!(f, "Application-specific error: {}", err),
         }
@@ -529,22 +535,46 @@ pub trait CECConnection: Sync + Send {
 pub struct CEC {
     conn: Arc<dyn CECConnection>,
     tx_signal: Arc<(Mutex<Option<CECCommand>>, Condvar)>,
+
+    // Internal state.
+    muted_state: bool,
+    vol_level: i32,
+    power_state: Arc<Mutex<bool>>,
+    input_state: Arc<Mutex<PhysicalAddress>>,
+    input_names: Arc<Mutex<HashMap<String, PhysicalAddress>>>,
 }
 
 impl CEC {
-    pub fn new(conn: Arc<dyn CECConnection>, osd_name: &str, vendor_id: u32) -> Self {
+    pub fn new(
+        conn: Arc<dyn CECConnection>,
+        osd_name: &str,
+        vendor_id: u32,
+        initial_input_names: &[(&str, PhysicalAddress)],
+    ) -> Result<Self, CECError> {
         let tx_signal = Arc::new((Mutex::new(None), Condvar::new()));
+        let power_state = Arc::new(Mutex::new(false));
+        let input_state = Arc::new(Mutex::new(0));
+        let input_names = Arc::new(Mutex::new(HashMap::new()));
+        for (k, v) in initial_input_names {
+            input_names.lock().unwrap().insert(k.to_string(), *v);
+        }
         let inner_tx_signal = tx_signal.clone();
         let inner_conn = conn.clone();
-        let name = osd_name.to_string();
+        let inner_input_state = input_state.clone();
+        let inner_input_names = input_names.clone();
+        let inner_power_state = power_state.clone();
+        let osd_name = osd_name.to_string();
+        let mut logical_to_physical = [0; 0xf];
         conn.set_rx_callback(Box::new(move |msg| {
-            info!("rx {:x?}", msg);
+            info!("rx {:x?} {:02x?}", msg, msg.message.payload());
             match &msg.message {
                 CECMessage::GiveOSDName => inner_conn
                     .transmit(CECCommand {
                         initiator: None,
                         destination: msg.initiator.unwrap(),
-                        message: CECMessage::SetOSDName { name: name.clone() },
+                        message: CECMessage::SetOSDName {
+                            name: osd_name.clone(),
+                        },
                     })
                     .unwrap(),
                 CECMessage::GiveDeviceVendorID => inner_conn
@@ -575,16 +605,88 @@ impl CEC {
                         },
                     })
                     .unwrap(),
+                CECMessage::SetOSDName { name } => {
+                    inner_input_names.lock().unwrap().insert(
+                        name.to_string(),
+                        logical_to_physical[msg.initiator.unwrap() as usize],
+                    );
+                }
+                CECMessage::ReportPhysicalAddress {
+                    physical_address, ..
+                } => {
+                    logical_to_physical[msg.initiator.unwrap() as usize] = *physical_address;
+                }
+                CECMessage::RoutingChange {
+                    original_address: _,
+                    new_address,
+                } => {
+                    *inner_input_state.lock().unwrap() = *new_address;
+                    *inner_power_state.lock().unwrap() = true;
+                }
+                CECMessage::SetStreamPath { physical_address } => {
+                    *inner_input_state.lock().unwrap() = *physical_address;
+                    *inner_power_state.lock().unwrap() = true;
+                }
+                CECMessage::ActiveSource { physical_address } => {
+                    *inner_input_state.lock().unwrap() = *physical_address;
+                    *inner_power_state.lock().unwrap() = true;
+                }
+                CECMessage::Standby => {
+                    *inner_power_state.lock().unwrap() = false;
+                }
+                CECMessage::ImageViewOn => {
+                    *inner_power_state.lock().unwrap() = true;
+                }
                 CECMessage::VendorCommand { vendor_data } => {
                     // See https://github.com/Pulse-Eight/libcec/blob/master/src/libcec/implementations/SLCommandHandler.cpp
                     match vendor_data[0] {
-                        1 => {
+                        0x01 => {
                             inner_conn
                                 .transmit(CECCommand {
                                     initiator: None,
                                     destination: msg.initiator.unwrap(),
                                     message: CECMessage::VendorCommand {
                                         vendor_data: vec![0x02, 0x05],
+                                    },
+                                })
+                                .unwrap();
+                        }
+                        0x04 => {
+                            inner_conn
+                                .transmit(CECCommand {
+                                    initiator: None,
+                                    destination: msg.initiator.unwrap(),
+                                    message: CECMessage::VendorCommand {
+                                        vendor_data: vec![0x05, DeviceType::RecordingDevice as u8],
+                                    },
+                                })
+                                .unwrap();
+                            inner_conn
+                                .transmit(CECCommand {
+                                    initiator: None,
+                                    destination: msg.initiator.unwrap(),
+                                    message: CECMessage::ReportPowerStatus {
+                                        power_status: PowerStatus::On,
+                                    },
+                                })
+                                .unwrap();
+                        }
+                        0x03 | 0x0b | 0xa0 => {
+                            inner_conn
+                                .transmit(CECCommand {
+                                    initiator: None,
+                                    destination: msg.initiator.unwrap(),
+                                    message: CECMessage::ReportPowerStatus {
+                                        power_status: PowerStatus::InTransitionStandbyToOn,
+                                    },
+                                })
+                                .unwrap();
+                            inner_conn
+                                .transmit(CECCommand {
+                                    initiator: None,
+                                    destination: msg.initiator.unwrap(),
+                                    message: CECMessage::ReportPowerStatus {
+                                        power_status: PowerStatus::On,
                                     },
                                 })
                                 .unwrap();
@@ -596,12 +698,24 @@ impl CEC {
             }
         }));
         conn.set_tx_callback(Box::new(move |msg| {
-            info!("tx {:x?}", msg);
+            info!("tx {:x?} {:02x?}", msg, msg.message.payload());
             let (lock, cvar) = &*inner_tx_signal;
             *lock.lock().unwrap() = Some(msg.clone());
             cvar.notify_all();
         }));
-        CEC { conn, tx_signal }
+        let mut cec = CEC {
+            conn,
+            tx_signal,
+            muted_state: false,
+            vol_level: 15,
+            input_names: input_names,
+            input_state: input_state,
+            power_state: power_state,
+        };
+        // Force the tv into a well-known state
+        cec.on_off(true)?;
+
+        Ok(cec)
     }
 
     pub fn poll_all(&self) -> Result<(), CECError> {
@@ -635,16 +749,12 @@ impl CEC {
         })?;
         let (lock, cvar) = &*self.tx_signal;
         let _ = cvar
-            .wait_timeout_while(
-                lock.lock().unwrap(),
-                std::time::Duration::from_millis(100),
-                |tx| {
-                    if let Some(CECCommand { message: sent, .. }) = tx {
-                        return !sent.payload().eq(&payload);
-                    }
-                    true
-                },
-            )
+            .wait_timeout_while(lock.lock().unwrap(), Duration::from_millis(200), |tx| {
+                if let Some(CECCommand { message: sent, .. }) = tx {
+                    return !sent.payload().eq(&payload);
+                }
+                true
+            })
             .unwrap();
         Ok(())
     }
@@ -663,7 +773,11 @@ impl CEC {
         self.transmit(LogicalAddress::TV, CECMessage::UserControlReleased)
     }
 
-    pub fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
+    pub fn set_volume_level(&mut self, level: i32) -> Result<(), CECError> {
+        self.volume_change(level - self.vol_level)
+    }
+
+    pub fn volume_change(&mut self, relative_steps: i32) -> Result<(), CECError> {
         if relative_steps > 0 {
             for _ in 0..relative_steps {
                 self.press_key(UserControl::VolumeUp)?;
@@ -673,44 +787,49 @@ impl CEC {
                 self.press_key(UserControl::VolumeDown)?;
             }
         }
+        self.vol_level = cmp::min(cmp::max(self.vol_level + relative_steps, 0), 100);
         Ok(())
     }
-    pub fn mute(&self, mute: bool) -> Result<(), CECError> {
+
+    pub fn mute(&mut self, mute: bool) -> Result<(), CECError> {
+        // Volume changes always cause the tv to become unmuted, so use them to
+        // force the tv into the proper state.
         if mute {
-            // self.conn.audio_mute()?;
+            self.volume_change(-1)?;
+            self.volume_change(1)?;
+            self.press_key(UserControl::Mute)?;
         } else {
-            // self.conn.audio_unmute()?;
+            self.press_key(UserControl::Mute)?;
+            self.volume_change(-1)?;
+            self.volume_change(1)?;
         }
-        self.press_key(UserControl::Mute)
+        self.muted_state = mute;
+        Ok(())
     }
-    pub fn on_off(&self, on: bool) -> Result<(), CECError> {
+    pub fn on_off(&mut self, on: bool) -> Result<(), CECError> {
+        *self.power_state.lock().unwrap() = on;
         if on {
             self.transmit(LogicalAddress::TV, CECMessage::ImageViewOn)
         } else {
             self.transmit(LogicalAddress::TV, CECMessage::Standby)
         }
     }
-    pub fn set_input(&self, new_input: String) -> Result<(), CECError> {
-        // TODO(stvn): Fix this assumption!
-        // let old_addr = self.conn.get_physical_address()?;
-        let new_addr = match new_input.as_str() {
-            "1" => 0x1000,
-            "2" => 0x2000,
-            "3" => 0x3000,
-            "4" => 0x4000,
-            _ => 0x0000,
-        };
+    pub fn set_input(&self, new_input: &str) -> Result<(), CECError> {
+        let new_addr = *self
+            .input_names
+            .lock()
+            .unwrap()
+            .get(new_input)
+            .ok_or(CECError::UnknownInputDevice(new_input.into()))?;
         self.broadcast(CECMessage::ReportPhysicalAddress {
             physical_address: new_addr,
             device_type: DeviceType::RecordingDevice,
         })?;
         self.broadcast(CECMessage::ActiveSource {
             physical_address: new_addr,
-        })
-        // self.broadcast(CECMessage::ReportPhysicalAddress {
-        //     physical_address: old_addr,
-        //     device_type: DeviceType::RecordingDevice,
-        // })
+        })?;
+        *self.input_state.lock().unwrap() = new_addr;
+        Ok(())
     }
 
     pub fn transmit_raw(&self, input: &[u8]) -> Result<(), CECError> {
@@ -718,6 +837,28 @@ impl CEC {
         debug!("sending {:x?}", cmd);
         self.conn.transmit(cmd)?;
         Ok(())
+    }
+
+    pub fn current_volume(&self) -> i32 {
+        self.vol_level
+    }
+    pub fn is_muted(&self) -> bool {
+        self.muted_state
+    }
+    pub fn is_on(&self) -> bool {
+        *self.power_state.lock().unwrap()
+    }
+    pub fn current_input(&self) -> PhysicalAddress {
+        *self.input_state.lock().unwrap()
+    }
+    pub fn names_by_addr(&self) -> HashMap<PhysicalAddress, Vec<String>> {
+        let mut map = HashMap::new();
+        for (name, &addr) in self.input_names.lock().unwrap().iter() {
+            let mut v = map.remove(&addr).unwrap_or(vec![]);
+            v.push(name.clone());
+            map.insert(addr, v);
+        }
+        map
     }
 }
 

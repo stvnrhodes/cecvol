@@ -1,14 +1,17 @@
 mod action;
+mod auth;
 mod cec;
 
 use action::devices::{
-    CommandErrors, CommandResults, CommandStatus, DeviceState, ErrorCodes, ExecuteResponsePayload,
-    Execution, FulfillmentRequest, FulfillmentResponse, QueryResponsePayload, RequestPayload,
-    ResponseErrors, ResponsePayload, SyncResponsePayload,
+    CommandErrors, CommandResults, CommandStatus, Device, DeviceAttributes, DeviceInfo,
+    DeviceNames, DeviceState, DeviceTrait, DeviceType, ErrorCodes, ExecuteResponsePayload,
+    Execution, FulfillmentRequest, FulfillmentResponse, InputKey, InputNames,
+    InputSelectorAttributes, OnOffAttributes, QueryResponsePayload, RequestPayload, ResponseErrors,
+    ResponsePayload, SyncResponsePayload, VolumeAttributes,
 };
 use actix_http::Response;
-use actix_web::{get, middleware, post, web, App, HttpServer, Responder};
-use log::{debug, error, info};
+use actix_web::{middleware, post, web, App, HttpServer, Responder};
+use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -16,15 +19,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
-#[derive(Deserialize)]
-struct AuthInfo {
-    // client_id: String,
-// redirect_uri: String,
-// state: String,
-// scope: Option<String>,
-// response_type: String, // always code
-// user_locale: String,
-}
+const DEVICE_ID: &str = "1";
 
 async fn index() -> impl Responder {
     let resp: &'static [u8] = include_bytes!("index.html");
@@ -32,14 +27,14 @@ async fn index() -> impl Responder {
     Response::Ok().content_type("text/html").body(resp)
 }
 
-#[get("/auth")]
-async fn auth(_info: web::Query<AuthInfo>) -> impl Responder {
-    // https://developers.google.com/assistant/smarthome/develop/implement-oauth#implement_oauth_account_linking
-    // Todo: verify client id and redirect uri is correct
-    // check that user is signed in
-    // generate auth code, expire after 10m
-    //redirect browser to redirect_uri, include code and state
-    "Unimplemented"
+fn device_state(cec: &cec::CEC) -> DeviceState {
+    DeviceState {
+        online: Some(true),
+        current_volume: Some(cec.current_volume()),
+        is_muted: Some(cec.is_muted()),
+        on: Some(cec.is_on()),
+        current_input: Some(format!("{:x}", cec.current_input())),
+    }
 }
 
 #[post("/fulfillment")]
@@ -51,81 +46,107 @@ async fn fulfillment(
     for input in &req.inputs {
         match input {
             RequestPayload::Sync => {
+                let inputs: Vec<InputKey> = cec
+                    .lock()
+                    .unwrap()
+                    .names_by_addr()
+                    .iter()
+                    .map(|(addr, names)| InputKey {
+                        key: format!("{:x}", addr),
+                        names: vec![InputNames {
+                            lang: "en".into(),
+                            name_synonym: names.to_vec(),
+                        }],
+                    })
+                    .collect();
                 return Ok(web::Json(FulfillmentResponse {
                     request_id: request_id,
                     payload: ResponsePayload::Sync(SyncResponsePayload {
                         // TODO(stvn): Switch to oauth identity
                         agent_user_id: "cecvol-stvn-user".into(),
-                        // TODO(stvn): Add devices
-                        devices: vec![],
+                        devices: vec![Device {
+                            id: DEVICE_ID.to_string(),
+                            device_type: DeviceType::RemoteControl,
+                            traits: vec![
+                                DeviceTrait::InputSelector,
+                                DeviceTrait::OnOff,
+                                DeviceTrait::Volume,
+                            ],
+                            name: DeviceNames {
+                                name: "cecvol".into(),
+                                nicknames: vec!["pi".into(), "raspberry pi".into()],
+                                default_names: vec!["Raspberry Pi 3 Model B+".into()],
+                            },
+                            will_report_state: false,
+                            room_hint: None,
+                            device_info: Some(DeviceInfo {
+                                manufacturer: Some("Raspberry Pi Foundation".into()),
+                                model: Some("PI3P".into()),
+                                hw_version: None,
+                                sw_version: None,
+                            }),
+                            attributes: DeviceAttributes {
+                                input_selector_attributes: Some(InputSelectorAttributes {
+                                    command_only_input_selector: false,
+                                    ordered_inputs: false,
+                                    available_inputs: inputs,
+                                }),
+                                on_off_attributes: Some(OnOffAttributes {
+                                    command_only_on_off: false,
+                                    query_only_on_off: false,
+                                }),
+                                volume_attributes: Some(VolumeAttributes {
+                                    volume_max_level: 100,
+                                    volume_can_mute_and_unmute: true,
+                                    volume_default_percentage: 15,
+                                    level_step_size: 2,
+                                    command_only_volume: true,
+                                }),
+                            },
+                        }],
                         errors: None,
                     }),
                 }));
             }
-            RequestPayload::Query { devices: _ } => {
+            RequestPayload::Query { devices } => {
+                let mut device_data = HashMap::new();
+                for device in devices {
+                    if device.id == DEVICE_ID {
+                        device_data
+                            .insert(DEVICE_ID.to_string(), device_state(&cec.lock().unwrap()));
+                    }
+                }
                 return Ok(web::Json(FulfillmentResponse {
                     request_id: request_id,
                     payload: ResponsePayload::Query(QueryResponsePayload {
-                        devices: HashMap::new(),
+                        devices: device_data,
                         errors: None,
                     }),
                 }));
             }
             RequestPayload::Execute { commands } => {
+                let mut cec = cec.lock().unwrap();
                 for c in commands {
                     for e in &c.execution {
                         match e {
-                            Execution::SetVolume { volume_level } => println!("{}", volume_level),
+                            Execution::SetVolume { volume_level } => {
+                                cec.set_volume_level(*volume_level)?;
+                            }
                             Execution::VolumeRelative { relative_steps } => {
-                                info!("changing volume of {:?} by {}", c.devices, relative_steps);
-                                cec.lock().unwrap().volume_change(*relative_steps)?;
-                                let result = CommandResults {
-                                    ids: c.devices.iter().map(|d| d.id.clone()).collect(),
-                                    status: CommandStatus::SUCCESS,
-                                    error_code: CommandErrors::None,
-                                    states: DeviceState {
-                                        online: Some(true),
-                                        current_volume: Some(5),
-                                        ..Default::default()
-                                    },
-                                };
-                                return Ok(web::Json(FulfillmentResponse {
-                                    request_id: request_id,
-                                    payload: ResponsePayload::Execute(ExecuteResponsePayload {
-                                        commands: vec![result],
-                                        errors: None,
-                                    }),
-                                }));
+                                cec.volume_change(*relative_steps)?;
                             }
                             Execution::Mute { mute } => {
-                                cec.lock().unwrap().mute(*mute)?;
-                                return Ok(web::Json(FulfillmentResponse {
-                                    request_id: request_id,
-                                    payload: ResponsePayload::Execute(ExecuteResponsePayload {
-                                        commands: vec![],
-                                        errors: None,
-                                    }),
-                                }));
+                                cec.mute(*mute)?;
                             }
                             Execution::OnOff { on } => {
-                                cec.lock().unwrap().on_off(*on)?;
-                                return Ok(web::Json(FulfillmentResponse {
-                                    request_id: request_id,
-                                    payload: ResponsePayload::Execute(ExecuteResponsePayload {
-                                        commands: vec![],
-                                        errors: None,
-                                    }),
-                                }));
+                                cec.on_off(*on)?;
                             }
                             Execution::SetInput { new_input } => {
-                                cec.lock().unwrap().set_input(new_input.clone())?;
-                                return Ok(web::Json(FulfillmentResponse {
-                                    request_id: request_id,
-                                    payload: ResponsePayload::Execute(ExecuteResponsePayload {
-                                        commands: vec![],
-                                        errors: None,
-                                    }),
-                                }));
+                                if !cec.is_on() {
+                                    cec.on_off(true)?;
+                                    tokio::time::delay_for(Duration::from_millis(4000)).await;
+                                }
+                                cec.set_input(new_input)?;
                             }
                             _ => {
                                 return Ok(web::Json(FulfillmentResponse {
@@ -137,6 +158,19 @@ async fn fulfillment(
                                 }))
                             }
                         }
+                        // TODO(stvn): Do all executions in the array, improve error handling
+                        return Ok(web::Json(FulfillmentResponse {
+                            request_id: request_id,
+                            payload: ResponsePayload::Execute(ExecuteResponsePayload {
+                                commands: vec![CommandResults {
+                                    ids: c.devices.iter().map(|d| d.id.clone()).collect(),
+                                    status: CommandStatus::Success,
+                                    error_code: CommandErrors::None,
+                                    states: Some(device_state(&cec)),
+                                }],
+                                errors: None,
+                            }),
+                        }));
                     }
                 }
             }
@@ -193,7 +227,24 @@ async fn main() -> anyhow::Result<()> {
     {
         vchi.alloc_logical_addr()?;
     }
-    let cec_conn = cec::CEC::new(Arc::new(vchi), osd_name, vendor_id);
+    let cec_conn = cec::CEC::new(
+        Arc::new(vchi),
+        osd_name,
+        vendor_id,
+        &[
+            ("HDMI 1", 0x1000),
+            ("HDMI 2", 0x2000),
+            ("HDMI 3", 0x3000),
+            ("HDMI 4", 0x4000),
+            ("1", 0x1000),
+            ("2", 0x2000),
+            ("3", 0x3000),
+            ("4", 0x4000),
+            ("NintendoSwitch", 0x2000),
+            ("PC", 0x4000),
+            ("Serpens", 0x4000),
+        ],
+    )?;
     let conn = web::Data::new(Mutex::new(cec_conn));
 
     let thread_conn = conn.clone();
@@ -212,7 +263,7 @@ async fn main() -> anyhow::Result<()> {
             .wrap(middleware::Compress::default())
             .service(fulfillment)
             .service(cecexec)
-            .service(auth)
+            .service(auth::auth)
             .route("/", web::get().to(index))
     })
     .bind("0.0.0.0:8080")?
@@ -222,6 +273,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // TODO
-// - internally record device status
-// - maybe poll on devices present
+// make screen show state
 // - oauth
+// read in .env
+// custom port #
+// - RoutingChange SetStreamPath set the input

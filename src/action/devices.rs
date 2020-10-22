@@ -49,12 +49,12 @@ pub enum DeviceTrait {
 pub struct DeviceNames {
     // Primary name of the device, generally provided by the user. This is also
     // the name the Assistant will prefer to describe the device in responses.
-    name: String,
+    pub name: String,
     // Additional names provided by the user for the device.
-    nicknames: Vec<String>,
+    pub nicknames: Vec<String>,
     // List of names provided by the manufacturer rather than the user, such
     // as serial numbers, SKUs, etc.
-    default_names: Vec<String>,
+    pub default_names: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -63,16 +63,16 @@ pub struct DeviceInfo {
     // Especially useful when the developer is a hub for other devices. Google
     // may provide a standard list of manufacturers here so that e.g. TP-Link
     // and Smartthings both describe 'osram' the same way.
-    manufacturer: Option<String>,
+    pub manufacturer: Option<String>,
     // The model or SKU identifier of the particular device.
     #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<String>,
+    pub model: Option<String>,
     // Specific version number attached to the hardware if available.
     #[serde(skip_serializing_if = "Option::is_none")]
-    hw_version: Option<String>,
+    pub hw_version: Option<String>,
     // Specific version number attached to the software/firmware, if available.
     #[serde(skip_serializing_if = "Option::is_none")]
-    sw_version: Option<String>,
+    pub sw_version: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -155,36 +155,36 @@ pub struct SyncResponsePayload {
 #[derive(Serialize)]
 pub struct QueryResponsePayload {
     // Map of devices. Maps developer device ID to object of state properties.
-    pub devices: HashMap<String, DeviceAttributes>,
+    pub devices: HashMap<String, DeviceState>,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     pub errors: Option<ResponseErrors>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct InputNames {
-    lang: String, // Language code.
+    pub lang: String, // Language code.
     // User-friendly names for the input, in a given language. The first
     // ssynonym is used in Google Assistant's response to the user.
-    name_synonym: Vec<String>,
+    pub name_synonym: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct InputKey {
     // Unique key for the input. The key should not be exposed to users in
     // speech or response.
-    key: String,
+    pub key: String,
     // List of names for the input for all available languages.
-    names: Vec<InputNames>,
+    pub names: Vec<InputNames>,
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct DeviceAttributes {
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    input_selector_attributes: Option<InputSelectorAttributes>,
+    pub input_selector_attributes: Option<InputSelectorAttributes>,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    on_off_attributes: Option<OnOffAttributes>,
+    pub on_off_attributes: Option<OnOffAttributes>,
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
-    volume_attributes: Option<VolumeAttributes>,
+    pub volume_attributes: Option<VolumeAttributes>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -194,14 +194,14 @@ pub struct InputSelectorAttributes {
     // hardwired or networked. Each feed should be named and reasonably
     // persistent. Make sure to define your synonyms carefully to prevent
     // undesired (over-)triggering.
-    available_inputs: Vec<InputKey>,
+    pub available_inputs: Vec<InputKey>,
     // Indicates if the device supports using one-way (true) or two-way (false)
     // communication. Set this attribute to true if the device cannot respond
     // to a QUERY intent or Report State for this trait.
-    command_only_input_selector: bool,
+    pub command_only_input_selector: bool,
     // True if the list of output is ordered. This also indicates that the
     // 'next' and 'previous' functionality is available.
-    ordered_inputs: bool,
+    pub ordered_inputs: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -210,12 +210,12 @@ pub struct OnOffAttributes {
     // Indicates if the device supports using one-way (true) or two-way (false)
     // communication. Set this attribute to true if the device cannot respond
     // to a QUERY intent or Report State for this trait.
-    command_only_on_off: bool,
+    pub command_only_on_off: bool,
     // Indicates if the device or sensor can only be queried for state
     // information and cannot be controlled. Set this attribute to true if the
     // device can only respond to QUERY intents and cannot respond to EXECUTE
     // intents.
-    query_only_on_off: bool,
+    pub query_only_on_off: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -224,19 +224,19 @@ pub struct VolumeAttributes {
     // The maximum volume level, assuming a baseline of 0 (mute). Assistant
     // will adjust adverbial commands (e.g. 'make the tv a little louder')
     // accordingly.
-    volume_max_level: i32,
+    pub volume_max_level: i32,
     // Indicates if the device can mute and unmute the volume. Mute is a
     // separate option as the 'mute' behavior takes the volume to 0 while
     // remembering the previous volume, so that unmute restores it. This is
     // reflected in volume state—if volume is 5, and the user mutes, the volume
     // remains 5 and isMuted is true.
-    volume_can_mute_and_unmute: bool,
+    pub volume_can_mute_and_unmute: bool,
     // The volume (in percentage) for the default volume defined by user or
     // manufacturer. The scale must be 0-100.
-    volume_default_percentage: i32,
+    pub volume_default_percentage: i32,
     // The default step size for relative volume queries like 'volume up on
     // <device_name>.
-    level_step_size: i32,
+    pub level_step_size: i32,
     // Indicates if the device operates using one-way (true) or two-way (false)
     // communication. For example, if the controller can confirm the new device
     // state after sending the request, this field would be false. If it's not
@@ -277,15 +277,16 @@ pub struct DeviceState {
 }
 
 #[derive(Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum CommandStatus {
-    SUCCESS, // Confirm that the command succeeded.
-    PENDING, // Command is enqueued but expected to succeed.
-    OFFLINE, // Target device is in offline state or unreachable.
-    ERROR,   // Target device is unable to perform the command.
+    Success, // Confirm that the command succeeded.
+    Pending, // Command is enqueued but expected to succeed.
+    Offline, // Target device is in offline state or unreachable.
+    Error,   // Target device is unable to perform the command.
     // There is an issue or alert associated with a command. The command could
     // succeed or fail. This status type is typically set when you want to
     // send additional information about another connected device.
-    EXCEPTIONS,
+    Exceptions,
 }
 
 #[derive(Serialize, Deserialize, PartialEq)]
@@ -315,7 +316,8 @@ pub struct CommandResults {
     pub status: CommandStatus, // Result of the execute operation.
     // Expanding ERROR state if needed from the preset error codes, which will
     // map to the errors presented to users.
-    pub states: DeviceState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub states: Option<DeviceState>,
     #[serde(skip_serializing_if = "CommandErrors::is_none")]
     pub error_code: CommandErrors,
 }
