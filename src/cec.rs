@@ -877,22 +877,21 @@ mod tests {
         };
     }
 
-    test_cec_msg! {none_msg, CECMessage::None, "00"}
     test_cec_msg! {image_view, CECMessage::ImageViewOn, "04"}
     test_cec_msg! {active_source, CECMessage::ActiveSource{
         physical_address:0x1000,
     }, "82:10:00"}
     test_cec_msg! {report_physical_address, CECMessage::ReportPhysicalAddress{
         physical_address:0x1000,
-        device_type:LogicalAddress::Tuner1,
+        device_type: DeviceType::Tuner,
     }, "84:10:00:03"}
     test_cec_msg! {report_power_status, CECMessage::ReportPowerStatus{
-        power_status:PowerStatus::Standby,
-    }, "90:00:01"}
+        power_status: PowerStatus::Standby,
+    }, "90:01"}
     test_cec_msg! {set_osd_name, CECMessage::SetOSDName{
         name:"example".to_string(),
     }, "47:65:78:61:6d:70:6c:65"}
     test_cec_msg! {user_control_pressed, CECMessage::UserControlPressed{
         user_control_code:UserControl::Enter,
-    }, "44:0b"}
+    }, "44:2b"}
 }

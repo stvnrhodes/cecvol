@@ -1,3 +1,5 @@
+mod jwt;
+
 use actix_web::{error, get, web, Responder};
 use serde::Deserialize;
 
@@ -56,6 +58,7 @@ struct TokenInfo {
     refresh_token: String,
 }
 
+#[allow(dead_code)]
 struct Token {
     token_type: String,
     access_token: String,
