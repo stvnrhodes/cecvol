@@ -399,6 +399,10 @@ pub enum Execution {
     OnOff {
         on: bool, // Whether to turn the device on or off.
     },
+
+    // For triggering WakeOnLAN packet, not a real command.
+    #[serde(rename = "action.devices.commands.wol")]
+    WakeOnLan,
 }
 
 #[derive(Deserialize)]

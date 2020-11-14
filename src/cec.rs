@@ -1,3 +1,4 @@
+pub mod noop;
 pub mod vchi;
 pub mod vchiq_ioctl;
 

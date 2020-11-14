@@ -1,9 +1,27 @@
 mod jwt;
 
-use actix_web::{error, get, web, Responder};
+use actix_web::{
+    error, get, http, post, web, HttpMessage, HttpRequest, HttpResponse, Responder, Result,
+};
+use jwt::{Algorithm, Payload};
+use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
+use std::time::{Duration, SystemTime};
 
 const ENGLISH_LOCALE: &str = "en";
+const AUTH_COOKIE_NAME: &str = "auth";
+
+// TODO(stvn): These should all be config, not hardcoded
+const HMAC_SECRET: &str = "WxAkpsafDoqXXZc7z4REpEfTaaQ1vIYt19";
+const CLIENT_ID: &str = "google";
+const CLIENT_SECRET: &str = "Tuq3Cw1iszftc50";
+const ISSUER_NAME: &str = "cec.stevenandbonnie.com";
+const GLOBAL_PASSWORD: &str = "cecpassword";
+const _PROJECT_ID: &str = "cecvol-f4044";
+const REDIRECTS: [&str; 2] = [
+    "https://oauth-redirect.googleusercontent.com/r/cecvol-f4044",
+    "https://oauth-redirect-sandbox.googleusercontent.com/r/cecvol-f4044",
+];
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -23,16 +41,118 @@ struct AuthInfo {
 }
 
 #[get("/auth")]
-async fn auth(info: web::Query<AuthInfo>) -> impl Responder {
+async fn auth(req: HttpRequest, info: web::Query<AuthInfo>) -> impl Responder {
     if info.user_locale != ENGLISH_LOCALE {
         return Err(error::ErrorBadRequest("Non-english locale"));
     }
-    // https://developers.google.com/assistant/smarthome/develop/implement-oauth#implement_oauth_account_linking
-    // Todo: verify client id and redirect uri is correct
-    // check that user is signed in
-    // generate auth code, expire after 10m
-    //redirect browser to redirect_uri, include code and state
-    Ok("Unimplemented")
+    if info.client_id != CLIENT_ID {
+        return Err(error::ErrorBadRequest("Bad client id"));
+    }
+    if !has_valid_auth(&req).unwrap_or(false) {
+        return Ok(HttpResponse::Found()
+            .header(
+                "Location",
+                format!(
+                    "/login?redirect={}",
+                    utf8_percent_encode(req.path(), NON_ALPHANUMERIC)
+                ),
+            )
+            .finish());
+    }
+    if !REDIRECTS.contains(&info.redirect_uri.as_str()) {
+        return Err(error::ErrorBadRequest("Bad redirect id"));
+    }
+
+    let now = SystemTime::now();
+    let expiration = now + Duration::from_secs(10 * 60);
+    let payload: String = Payload::new()
+        .with_issuer(ISSUER_NAME.into())
+        .with_not_before(now)?
+        .with_expiration(expiration)?
+        .with_issued_at(now)?
+        .to_token(Algorithm::HS256, HMAC_SECRET)?;
+
+    Ok(HttpResponse::Found()
+        .header(
+            "Location",
+            format!(
+                "{}?code={}&state={}",
+                info.redirect_uri, payload, info.state
+            ),
+        )
+        .finish())
+}
+
+#[get("/login")]
+async fn login_page() -> impl Responder {
+    let resp: &'static [u8] = include_bytes!("auth.html");
+    HttpResponse::Ok().content_type("text/html").body(resp)
+}
+
+#[derive(Deserialize)]
+struct AuthFormData {
+    password: String,
+}
+#[derive(Deserialize)]
+struct AuthQueryString {
+    redirect: Option<String>,
+}
+
+#[post("/login")]
+async fn login(
+    data: web::Form<AuthFormData>,
+    qs: web::Query<AuthQueryString>,
+) -> Result<HttpResponse> {
+    // TODO(stvn): Put into config
+    if data.password != GLOBAL_PASSWORD {
+        return Ok(HttpResponse::Unauthorized().body("Bad password"));
+    }
+
+    let now = SystemTime::now();
+    let expiration = now + Duration::from_secs(24 * 7 * 60 * 60);
+    let payload: String = Payload::new()
+        // TODO(stvn): Put into config
+        .with_issuer(ISSUER_NAME.into())
+        .with_not_before(now)?
+        .with_expiration(expiration)?
+        .with_issued_at(now)?
+        .to_token(Algorithm::HS256, HMAC_SECRET)?;
+
+    Ok(HttpResponse::Found()
+        .header(
+            "Location",
+            qs.redirect.as_ref().unwrap_or(&"/".to_string()).clone(),
+        )
+        .cookie(
+            http::Cookie::build(AUTH_COOKIE_NAME, payload)
+                .expires(expiration.into())
+                .path("/")
+                // TODO(stvn): Configure this
+                //.secure(true)
+                .http_only(true)
+                .finish(),
+        )
+        .finish())
+}
+
+// TODO(stvn): Turn into middleware
+pub fn has_valid_auth(req: &HttpRequest) -> Result<bool, jwt::Error> {
+    if let Some(header) = req.headers().get("Authorization") {
+        let payload = Payload::from_token(
+            header
+                .to_str()
+                .unwrap_or("")
+                .strip_prefix("Bearer ")
+                .unwrap_or(""),
+            HMAC_SECRET,
+        )?;
+        return payload.valid_at(SystemTime::now());
+    }
+    if let Some(cookie) = req.cookie("auth") {
+        let payload = Payload::from_token(cookie.value(), HMAC_SECRET)?;
+        return payload.valid_at(SystemTime::now());
+    }
+    Ok(false)
 }
 
 #[derive(Deserialize)]
@@ -77,5 +197,3 @@ async fn token(info: web::Query<AuthInfo>) -> impl Responder {
     // Otherwise, use the user ID from the refresh token to generate an access token. These tokens can be any string value, but they must uniquely represent the user and the client the token is for, and they must not be guessable. For access tokens, also record the expiration time of the token, typically an hour after you issue the token.
     Ok("Unimplemented")
 }
-
-// maybe just generate gibberish, store as file on disk?

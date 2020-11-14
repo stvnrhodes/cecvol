@@ -4,6 +4,9 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="icon"
+        href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'><text x='-1' y='15.5'>📺</text></svg>"
+        type="image/svg+xml" />
     <title>cecvol</title>
     <style>
         button {
@@ -50,6 +53,11 @@
                 'params': {
                     'mute': mute
                 }
+            })
+        }
+        function wol() {
+            executeCommand({
+                'command': 'action.devices.commands.wol',
             })
         }
         function setInput(newInput) {
@@ -122,6 +130,9 @@
         <button onclick="setInput('2')">hdmi2</button>
         <button onclick="setInput('3')">hdmi3</button>
         <button onclick="setInput('4')">hdmi4</button>
+    </p>
+    <p>
+        <button onclick="wol()">wol</button>
     </p>
     <p>
         <input type="text" id="cec">

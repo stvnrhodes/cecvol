@@ -1,5 +1,7 @@
+use actix_web::error::ResponseError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::time::{SystemTime, SystemTimeError};
 
 const OUTER_KEY_PAD: u8 = 0x5c;
 const INNER_KEY_PAD: u8 = 0x36;
@@ -15,7 +17,7 @@ struct Header {
 }
 
 #[derive(Default, Debug, Deserialize, Serialize, PartialEq)]
-struct Payload {
+pub struct Payload {
     // The "iss" (issuer) claim identifies the principal that issued the
     // JWT.  The processing of this claim is generally application specific.
     // The "iss" value is a case-sensitive string containing a StringOrURI
@@ -55,7 +57,7 @@ struct Payload {
     // a few minutes, to account for clock skew.  Its value MUST be a number
     // containing a NumericDate value.  Use of this claim is OPTIONAL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    exp: Option<i64>,
+    exp: Option<u64>,
 
     // The "nbf" (not before) claim identifies the time before which the JWT
     // MUST NOT be accepted for processing.  The processing of the "nbf"
@@ -65,14 +67,14 @@ struct Payload {
     // account for clock skew.  Its value MUST be a number containing a
     // NumericDate value.  Use of this claim is OPTIONAL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    nbf: Option<i64>,
+    nbf: Option<u64>,
 
     // The "iat" (issued at) claim identifies the time at which the JWT was
     // issued.  This claim can be used to determine the age of the JWT.  Its
     // value MUST be a number containing a NumericDate value.  Use of this
     // claim is OPTIONAL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    iat: Option<i64>,
+    iat: Option<u64>,
 
     // The "jti" (JWT ID) claim provides a unique identifier for the JWT.
     // The identifier value MUST be assigned in a manner that ensures that
@@ -86,13 +88,8 @@ struct Payload {
     jti: Option<String>,
 }
 
-//    HMACSHA256(
-//     base64UrlEncode(header) + "." +
-//     base64UrlEncode(payload),
-//     secret)
-
 #[derive(thiserror::Error, Debug)]
-enum Error {
+pub enum Error {
     #[error("Wrong number of . sections")]
     WrongNumSections(usize),
     #[error("Unknown algorithm")]
@@ -105,6 +102,12 @@ enum Error {
     Base64Error(#[from] base64::DecodeError),
     #[error("Issue encoding as json")]
     JSONError(#[from] serde_json::Error),
+    #[error("Issue with time")]
+    SystemTimeError(#[from] SystemTimeError),
+}
+
+impl ResponseError for Error {
+    // TODO(stvn): Map errors better
 }
 
 fn hmac_sha256(header: impl AsRef<[u8]>, payload: impl AsRef<[u8]>, secret: &str) -> Vec<u8> {
@@ -125,7 +128,47 @@ fn hmac_sha256(header: impl AsRef<[u8]>, payload: impl AsRef<[u8]>, secret: &str
 }
 
 impl Payload {
-    fn from_token(token: &str, secret: &str) -> Result<Payload, Error> {
+    pub fn new() -> Payload {
+        Default::default()
+    }
+    pub fn with_issuer(mut self, issuer: String) -> Self {
+        self.iss = Some(issuer);
+        self
+    }
+    #[allow(dead_code)]
+    pub fn with_subject(mut self, subject: String) -> Self {
+        self.sub = Some(subject);
+        self
+    }
+    #[allow(dead_code)]
+    pub fn with_audience(mut self, audience: String) -> Self {
+        self.aud = Some(audience);
+        self
+    }
+    pub fn with_expiration(mut self, expiration: SystemTime) -> Result<Self, Error> {
+        self.exp = Some(expiration.duration_since(SystemTime::UNIX_EPOCH)?.as_secs());
+        Ok(self)
+    }
+    pub fn with_not_before(mut self, not_before: SystemTime) -> Result<Self, Error> {
+        self.nbf = Some(not_before.duration_since(SystemTime::UNIX_EPOCH)?.as_secs());
+        Ok(self)
+    }
+    pub fn with_issued_at(mut self, issued_at: SystemTime) -> Result<Self, Error> {
+        self.iat = Some(issued_at.duration_since(SystemTime::UNIX_EPOCH)?.as_secs());
+        Ok(self)
+    }
+    pub fn valid_at(&self, time: SystemTime) -> Result<bool, Error> {
+        let time = time.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+        Ok(self.iat.unwrap_or(time) <= time
+            && self.nbf.unwrap_or(time) <= time
+            && self.exp.unwrap_or(time) >= time)
+    }
+    #[allow(dead_code)]
+    pub fn with_jwt_id(mut self, jwt_id: String) -> Self {
+        self.jti = Some(jwt_id);
+        self
+    }
+    pub fn from_token(token: &str, secret: &str) -> Result<Payload, Error> {
         let vec: Vec<&str> = token.split('.').collect();
         if vec.len() != 3 {
             return Err(Error::WrongNumSections(vec.len()));
@@ -153,7 +196,7 @@ impl Payload {
         let payload: Payload = serde_json::from_slice(&payload_json)?;
         Ok(payload)
     }
-    fn to_token(&self, alg: Algorithm, secret: &str) -> Result<String, Error> {
+    pub fn to_token(&self, alg: Algorithm, secret: &str) -> Result<String, Error> {
         let payload = base64::encode_config(serde_json::to_string(self)?, base64::URL_SAFE_NO_PAD);
         match alg {
             Algorithm::HS256 => {

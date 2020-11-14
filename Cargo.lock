@@ -499,6 +499,7 @@ dependencies = [
  "log",
  "nix",
  "num_enum",
+ "percent-encoding",
  "serde",
  "serde_json",
  "sha2",

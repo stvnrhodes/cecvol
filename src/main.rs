@@ -1,6 +1,7 @@
 mod action;
 mod auth;
 mod cec;
+mod wol;
 
 use action::devices::{
     CommandErrors, CommandResults, CommandStatus, Device, DeviceAttributes, DeviceInfo,
@@ -9,8 +10,7 @@ use action::devices::{
     InputSelectorAttributes, OnOffAttributes, QueryResponsePayload, RequestPayload, ResponseErrors,
     ResponsePayload, SyncResponsePayload, VolumeAttributes,
 };
-use actix_http::Response;
-use actix_web::{middleware, post, web, App, HttpServer, Responder};
+use actix_web::{middleware, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,10 +21,15 @@ use std::time::Duration;
 
 const DEVICE_ID: &str = "1";
 
-async fn index() -> impl Responder {
+async fn index(req: HttpRequest) -> impl Responder {
+    if !auth::has_valid_auth(&req).unwrap_or(false) {
+        return HttpResponse::Found()
+            .header("Location", "/login?redirect=%2F")
+            .finish();
+    }
     let resp: &'static [u8] = include_bytes!("index.html");
     //.set_header(http::header::CONTENT_TYPE, "text/html; charset=UTF-8")
-    Response::Ok().content_type("text/html").body(resp)
+    HttpResponse::Ok().content_type("text/html").body(resp)
 }
 
 fn device_state(cec: &cec::CEC) -> DeviceState {
@@ -39,9 +44,14 @@ fn device_state(cec: &cec::CEC) -> DeviceState {
 
 #[post("/fulfillment")]
 async fn fulfillment(
+    full_req: HttpRequest,
     req: web::Json<FulfillmentRequest>,
     cec: web::Data<Mutex<cec::CEC>>,
 ) -> Result<web::Json<FulfillmentResponse>, actix_web::Error> {
+    if !auth::has_valid_auth(&full_req).unwrap_or(false) {
+        return Err(HttpResponse::Unauthorized().into());
+    }
+
     let request_id = req.request_id.clone();
     for input in &req.inputs {
         match input {
@@ -141,6 +151,10 @@ async fn fulfillment(
                             Execution::OnOff { on } => {
                                 cec.on_off(*on)?;
                             }
+                            Execution::WakeOnLan => {
+                                // TODO(stvn): Don't hard-code
+                                wol::wake([0x24, 0x4b, 0xfe, 0x55, 0x78, 0x94])?;
+                            }
                             Execution::SetInput { new_input } => {
                                 if !cec.is_on() {
                                     cec.on_off(true)?;
@@ -208,27 +222,31 @@ async fn cecexec(
     Ok(web::Json(ExecResponse {}))
 }
 
-#[actix_web::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug"))
         .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
         .init();
 
     debug!("Creating CEC connection...");
-    let vchi = cec::vchi::HardwareInterface::init()?;
     let osd_name = "cecvol";
     // LG's vendor code seems to be required for UserControl commands to work.
     let vendor_id = 0x00e091;
-    vchi.set_osd_name(osd_name)?;
-    vchi.set_vendor_id(vendor_id)?;
+    let vchi: Arc<dyn cec::CECConnection> = if true {
+        Arc::new(cec::noop::LogOnlyConn {})
+    } else {
+        let vchi = cec::vchi::HardwareInterface::init()?;
+        vchi.set_osd_name(osd_name)?;
+        vchi.set_vendor_id(vendor_id)?;
 
-    if vchi.get_logical_addr()? == cec::LogicalAddress::Broadcast
-        && vchi.get_physical_addr()? != 0xffff
-    {
-        vchi.alloc_logical_addr()?;
-    }
+        if vchi.get_logical_addr()? == cec::LogicalAddress::Broadcast
+            && vchi.get_physical_addr()? != 0xffff
+        {
+            vchi.alloc_logical_addr()?;
+        }
+        Arc::new(vchi)
+    };
     let cec_conn = cec::CEC::new(
-        Arc::new(vchi),
+        vchi,
         osd_name,
         vendor_id,
         &[
@@ -255,21 +273,25 @@ async fn main() -> anyhow::Result<()> {
         }
         thread::sleep(Duration::from_secs(100));
     });
-    debug!("Starting server...");
-    HttpServer::new(move || {
-        App::new()
-            .app_data(conn.clone())
-            .wrap(middleware::Logger::default())
-            .wrap(middleware::Compress::default())
-            .service(fulfillment)
-            .service(cecexec)
-            .service(auth::auth)
-            .route("/", web::get().to(index))
+    actix_web::rt::System::new("main").block_on(async move {
+        debug!("Starting server...");
+        HttpServer::new(move || {
+            App::new()
+                .app_data(conn.clone())
+                .wrap(middleware::Logger::default())
+                .wrap(middleware::Compress::default())
+                .service(fulfillment)
+                .service(cecexec)
+                .service(auth::auth)
+                .service(auth::login)
+                .service(auth::login_page)
+                .route("/", web::get().to(index))
+        })
+        .bind("0.0.0.0:8080")?
+        .run()
+        .await?;
+        Ok(())
     })
-    .bind("0.0.0.0:8080")?
-    .run()
-    .await?;
-    Ok(())
 }
 
 // TODO
@@ -278,3 +300,4 @@ async fn main() -> anyhow::Result<()> {
 // read in .env
 // custom port #
 // - RoutingChange SetStreamPath set the input
+// maybe send wol packet too?
