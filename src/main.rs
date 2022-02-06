@@ -14,6 +14,7 @@ use actix_web::{middleware, post, web, App, HttpRequest, HttpResponse, HttpServe
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
@@ -226,12 +227,13 @@ fn main() -> anyhow::Result<()> {
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug"))
         .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
         .init();
+    let addr = env::var("HTTP_ADDR").unwrap_or("0.0.0.0:8080".into());
 
     debug!("Creating CEC connection...");
     let osd_name = "cecvol";
     // LG's vendor code seems to be required for UserControl commands to work.
     let vendor_id = 0x00e091;
-    let vchi: Arc<dyn cec::CECConnection> = if true {
+    let vchi: Arc<dyn cec::CECConnection> = if false {
         Arc::new(cec::noop::LogOnlyConn {})
     } else {
         let vchi = cec::vchi::HardwareInterface::init()?;
@@ -287,7 +289,7 @@ fn main() -> anyhow::Result<()> {
                 .service(auth::login_page)
                 .route("/", web::get().to(index))
         })
-        .bind("0.0.0.0:8080")?
+        .bind(addr)?
         .run()
         .await?;
         Ok(())
