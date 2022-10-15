@@ -5,13 +5,12 @@ authors = ["Steven Rhodes <rhodes.steven@gmail.com>"]
 license = "MIT"
 readme = "README.md"
 description = "Allow external control of CEC commands to TV"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 actix = "0.10"
 actix-web = "3.1"
 actix-http = "2.0"
-anyhow = "1.0"
 base64 = "0.13"
 log = "0.4"
 lazy_static = "1.4"
@@ -25,6 +24,7 @@ sha2 = "0.9"
 env_logger = "0.7"
 thiserror = "1.0"
 tokio= { version="0.2", features=["time"] }
+clap = { version = "4.0.15", features = ["derive"] }
 
 [package.metadata.deb]
 maintainer-scripts = "debian/"

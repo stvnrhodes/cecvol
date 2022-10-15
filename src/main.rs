@@ -8,11 +8,11 @@ use action::devices::{
     InputNames, RequestPayload,
 };
 use actix_web::{middleware, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use clap::Parser;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use std::env;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
@@ -219,17 +219,30 @@ async fn cecexec(
     Ok(web::Json(ExecResponse {}))
 }
 
-fn main() -> anyhow::Result<()> {
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Address to listen on
+    #[arg(long, default_value = "0.0.0.0:8080")]
+    http_addr: String,
+
+    /// If true, use a fake cec connection instead of directly using the hardware.
+    #[arg(long)]
+    use_fake_cec_conn: bool,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
     env_logger::from_env(env_logger::Env::default().default_filter_or("debug"))
         .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
         .init();
-    let addr = env::var("HTTP_ADDR").unwrap_or("0.0.0.0:8080".into());
 
     debug!("Creating CEC connection...");
     let osd_name = "cecvol";
     // LG's vendor code seems to be required for UserControl commands to work.
     let vendor_id = 0x00e091;
-    let vchi: Arc<dyn cec::CECConnection> = if false {
+    let vchi: Arc<dyn cec::CECConnection> = if args.use_fake_cec_conn {
         Arc::new(cec::noop::LogOnlyConn {})
     } else {
         let vchi = cec::vchi::HardwareInterface::init()?;
@@ -285,7 +298,7 @@ fn main() -> anyhow::Result<()> {
                 .service(auth::login_page)
                 .route("/", web::get().to(index))
         })
-        .bind(addr)?
+        .bind(args.http_addr)?
         .run()
         .await?;
         Ok(())
