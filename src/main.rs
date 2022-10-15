@@ -4,15 +4,13 @@ mod cec;
 mod wol;
 
 use action::devices::{
-    CommandErrors, CommandResults, CommandStatus, Device, DeviceAttributes, DeviceInfo,
-    DeviceNames, DeviceState, DeviceTrait, DeviceType, ErrorCodes, ExecuteResponsePayload,
-    Execution, FulfillmentRequest, FulfillmentResponse, InputKey, InputNames,
-    InputSelectorAttributes, OnOffAttributes, QueryResponsePayload, RequestPayload, ResponseErrors,
-    ResponsePayload, SyncResponsePayload, VolumeAttributes,
+    DeviceState, ErrorCodes, Execution, FulfillmentRequest, FulfillmentResponse, InputKey,
+    InputNames, RequestPayload,
 };
 use actix_web::{middleware, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::HashMap;
 use std::env;
 use std::sync::Arc;
@@ -72,50 +70,49 @@ async fn fulfillment(
                     .collect();
                 return Ok(web::Json(FulfillmentResponse {
                     request_id: request_id,
-                    payload: ResponsePayload::Sync(SyncResponsePayload {
+                    payload: json!({
                         // TODO(stvn): Switch to oauth identity
-                        agent_user_id: "cecvol-stvn-user".into(),
-                        devices: vec![Device {
-                            id: DEVICE_ID.to_string(),
-                            device_type: DeviceType::RemoteControl,
-                            traits: vec![
-                                DeviceTrait::InputSelector,
-                                DeviceTrait::OnOff,
-                                DeviceTrait::Volume,
-                            ],
-                            name: DeviceNames {
-                                name: "cecvol".into(),
-                                nicknames: vec!["pi".into(), "raspberry pi".into()],
-                                default_names: vec!["Raspberry Pi 3 Model B+".into()],
-                            },
-                            will_report_state: false,
-                            room_hint: None,
-                            device_info: Some(DeviceInfo {
-                                manufacturer: Some("Raspberry Pi Foundation".into()),
-                                model: Some("PI3P".into()),
-                                hw_version: None,
-                                sw_version: None,
-                            }),
-                            attributes: DeviceAttributes {
-                                input_selector_attributes: Some(InputSelectorAttributes {
-                                    command_only_input_selector: false,
-                                    ordered_inputs: false,
-                                    available_inputs: inputs,
-                                }),
-                                on_off_attributes: Some(OnOffAttributes {
-                                    command_only_on_off: false,
-                                    query_only_on_off: false,
-                                }),
-                                volume_attributes: Some(VolumeAttributes {
-                                    volume_max_level: 100,
-                                    volume_can_mute_and_unmute: true,
-                                    volume_default_percentage: 15,
-                                    level_step_size: 2,
-                                    command_only_volume: true,
-                                }),
-                            },
-                        }],
-                        errors: None,
+                        "agentUserId": "cecvol-stvn-user",
+                        "devices": [
+                            {
+                                "id": DEVICE_ID.to_string(),
+                                "type": "actions.devices.types.RemoteControl",
+                                "traits": [
+                                    "action.devices.traits.AppSelector",
+                                    "action.devices.traits.InputSelector",
+                                    "action.devices.traits.MediaState",
+                                    "action.devices.traits.OnOff",
+                                    "action.devices.traits.TransportControl",
+                                    "action.devices.traits.Volume"
+                                ],
+                                "name": {
+                                    "name": "cecvol",
+                                    "nicknames": ["pi", "cec"]
+                                },
+                                "willReportState": false,
+                                "roomHint": "living room",
+                                "deviceInfo": {
+                                    "manufacturer": "Raspberry Pi Foundation",
+                                    "model": "PI3P"
+                                },
+                                "attributes": {
+                                    "availableApplications": [],
+                                    "commandOnlyInputSelector": true,
+                                    "orderedInputs": false,
+                                    "availableInputs": inputs,
+                                    "supportActivityState": false,
+                                    "supportPlaybackState": false,
+                                    "commandOnlyOnOff": true,
+                                    "queryOnlyOnOff": false,
+                                    "transportControlSupportedCommands": [],
+                                    "volumeMaxLevel": 100,
+                                    "volumeCanMuteAndUnmute": true,
+                                    "volumeDefaultPercentage": 12,
+                                    "levelStepSize": 1,
+                                    "commandOnlyVolume": true
+                                }
+                            }
+                        ]
                     }),
                 }));
             }
@@ -129,9 +126,8 @@ async fn fulfillment(
                 }
                 return Ok(web::Json(FulfillmentResponse {
                     request_id: request_id,
-                    payload: ResponsePayload::Query(QueryResponsePayload {
-                        devices: device_data,
-                        errors: None,
+                    payload: json!({
+                        "devices": device_data,
                     }),
                 }));
             }
@@ -166,9 +162,9 @@ async fn fulfillment(
                             _ => {
                                 return Ok(web::Json(FulfillmentResponse {
                                     request_id: request_id,
-                                    payload: ResponsePayload::Error(ResponseErrors {
-                                        error_code: ErrorCodes::NotSupported,
-                                        debug_string: "unknown command".into(),
+                                    payload: json!({
+                                        "errorCode": ErrorCodes::NotSupported,
+                                        "debugString": "unknown command",
                                     }),
                                 }))
                             }
@@ -176,14 +172,14 @@ async fn fulfillment(
                         // TODO(stvn): Do all executions in the array, improve error handling
                         return Ok(web::Json(FulfillmentResponse {
                             request_id: request_id,
-                            payload: ResponsePayload::Execute(ExecuteResponsePayload {
-                                commands: vec![CommandResults {
-                                    ids: c.devices.iter().map(|d| d.id.clone()).collect(),
-                                    status: CommandStatus::Success,
-                                    error_code: CommandErrors::None,
-                                    states: Some(device_state(&cec)),
-                                }],
-                                errors: None,
+                            payload: json!({
+                                "commands": [
+                                    {
+                                        "ids":  c.devices.iter().map(|d| d.id.clone()).collect::<Vec<String>>(),
+                                        "status": "SUCCESS",
+                                        "states": device_state(&cec)
+                                    }
+                                ],
                             }),
                         }));
                     }
@@ -195,9 +191,9 @@ async fn fulfillment(
 
     Ok(web::Json(FulfillmentResponse {
         request_id: request_id,
-        payload: ResponsePayload::Error(ResponseErrors {
-            error_code: ErrorCodes::NotSupported,
-            debug_string: "no inputs provided".into(),
+        payload: json!({
+            "errorCode": ErrorCodes::NotSupported,
+            "debugString": "no inputs provided",
         }),
     }))
 }

@@ -14,7 +14,6 @@ const AUTH_COOKIE_NAME: &str = "auth";
 // TODO(stvn): These should all be config, not hardcoded
 const HMAC_SECRET: &str = "WxAkpsafDoqXXZc7z4REpEfTaaQ1vIYt19";
 const CLIENT_ID: &str = "google";
-const CLIENT_SECRET: &str = "Tuq3Cw1iszftc50";
 const ISSUER_NAME: &str = "cec.stevenandbonnie.com";
 const GLOBAL_PASSWORD: &str = "cecpassword";
 const _PROJECT_ID: &str = "cecvol-f4044";

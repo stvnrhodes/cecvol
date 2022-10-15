@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 
 #[derive(Serialize, Deserialize)]
@@ -126,15 +127,6 @@ pub struct ResponseErrors {
     // Detailed error which will never be presented to users but may be logged
     // or used during development.
     pub debug_string: String,
-}
-
-#[derive(Serialize)]
-#[serde(untagged)]
-pub enum ResponsePayload {
-    Error(ResponseErrors),
-    Sync(SyncResponsePayload),
-    Query(QueryResponsePayload),
-    Execute(ExecuteResponsePayload),
 }
 
 #[derive(Serialize)]
@@ -417,5 +409,5 @@ pub struct FulfillmentRequest {
 pub struct FulfillmentResponse {
     // ID of the corresponding request.
     pub request_id: String,
-    pub payload: ResponsePayload,
+    pub payload: Value,
 }
