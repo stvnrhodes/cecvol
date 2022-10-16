@@ -76,27 +76,6 @@
                 }
             })
         }
-        function executeArbitraryCommand(cmd) {
-            let val = document.getElementById("cec").value;
-            fetch('/cecexec', {
-                method: 'POST',
-                mode: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ 'cmd': val })
-            })
-                .then(response => {
-                    document.getElementById('output').text_content = response.status;
-                    return response.text();
-                })
-                .then(text => {
-                    document.getElementById('output').text_content += text
-                }).catch((e) => {
-                    document.getElementById('output').text_content += e.message
-                });
-        }
-
         document.onkeydown = function (e) {
             e = e || window.event;
             if (e.keyCode == '38') {
@@ -132,18 +111,6 @@
     <p>
         <button onclick="wol()">wol</button>
     </p>
-    <p>
-        <input type="text" id="cec">
-        <button onclick="executeArbitraryCommand()">send</button>
-    </p>
-    <p id="output"></p>
-    <script>
-        document.getElementById('cec').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                executeArbitraryCommand();
-            }
-        });
-    </script>
 </body>
 
 </html>

@@ -15,7 +15,7 @@ use axum::response::IntoResponse;
 use axum::routing;
 use axum::Router;
 use clap::Parser;
-use log::{debug, error};
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -23,6 +23,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
+use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 
 const DEVICE_ID: &str = "1";
 
@@ -229,11 +230,11 @@ struct Args {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("INFO"))
         .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
         .init();
 
-    debug!("Creating CEC connection...");
+    info!("Creating CEC connection...");
     let osd_name = "cecvol";
     // LG's vendor code seems to be required for UserControl commands to work.
     let vendor_id = 0x00e091;
@@ -289,9 +290,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route_layer(middleware::from_fn(auth::has_valid_auth))
         .route("/login", routing::get(auth::login_page).post(auth::login))
         .route("/token", routing::get(auth::token))
-        .layer(extract::Extension(conn));
+        .layer(extract::Extension(conn))
+        .layer(
+            TraceLayer::new_for_http().make_span_with(
+                DefaultMakeSpan::new()
+                    .include_headers(true)
+                    .level(tracing::Level::INFO),
+            ),
+        );
 
-    debug!("Starting server...");
+    info!("Starting server...");
     axum::Server::bind(&args.http_addr.parse().unwrap())
         .serve(app.into_make_service())
         .await?;

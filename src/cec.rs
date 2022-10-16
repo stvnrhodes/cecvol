@@ -5,7 +5,7 @@ pub mod vchiq_ioctl;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Response;
-use log::{debug, info};
+use log::info;
 use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
 use std::array::TryFromSliceError;
 use std::cmp;
@@ -749,7 +749,7 @@ impl CEC {
     }
 
     fn transmit(&self, destination: LogicalAddress, message: CECMessage) -> Result<(), CECError> {
-        debug!("sending {:x?} to {:?}", message, destination);
+        info!("sending {:x?} to {:?}", message, destination);
         let payload = message.payload();
         self.conn.transmit(CECCommand {
             initiator: None,
@@ -843,7 +843,7 @@ impl CEC {
 
     pub fn transmit_raw(&self, input: &[u8]) -> Result<(), CECError> {
         let cmd = CECCommand::from_raw(input)?;
-        debug!("sending {:x?}", cmd);
+        info!("sending {:x?}", cmd);
         self.conn.transmit(cmd)?;
         Ok(())
     }
