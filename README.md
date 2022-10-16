@@ -1,4 +1,8 @@
-```
+# CECVol
+
+Volume control over CEC
+
+```shell
 sudo apt install cmake libudev-dev g++-arm-linux-gnueabihf
 rustup target add armv7-unknown-linux-gnueabihf
 cargo deb --target=armv7-unknown-linux-gnueabihf

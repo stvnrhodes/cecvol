@@ -13,18 +13,18 @@ use cookie::Cookie;
 use jwt::{Algorithm, Payload};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
+use serde_json::json;
 use std::time::Duration;
 use time::OffsetDateTime;
 
-const ENGLISH_LOCALE: &str = "en";
 const AUTH_COOKIE_NAME: &str = "auth";
 
 // TODO(stvn): These should all be config, not hardcoded
 const HMAC_SECRET: &str = "WxAkpsafDoqXXZc7z4REpEfTaaQ1vIYt19";
 const CLIENT_ID: &str = "google";
+const CLIENT_SECRET: &str = "super-duper-secure-secret";
 const ISSUER_NAME: &str = "cec.stevenandbonnie.com";
 const GLOBAL_PASSWORD: &str = "cecpassword";
-const _PROJECT_ID: &str = "cecvol-f4044";
 const REDIRECTS: [&str; 2] = [
     "https://oauth-redirect.googleusercontent.com/r/cecvol-f4044",
     "https://oauth-redirect-sandbox.googleusercontent.com/r/cecvol-f4044",
@@ -43,14 +43,9 @@ pub struct AuthInfo {
     scope: Option<String>,
     // The type of value to return in the response. For the OAuth 2.0 authorization code flow, the response type is always code.
     response_type: String,
-    // The Google Account language setting in RFC5646 format, used to localize your content in the user's preferred language.
-    user_locale: String,
 }
 
 pub async fn auth(info: extract::Query<AuthInfo>) -> response::Result<impl IntoResponse> {
-    if info.user_locale != ENGLISH_LOCALE {
-        return Err((StatusCode::BAD_REQUEST, "Non-english locale").into());
-    }
     if info.client_id != CLIENT_ID {
         return Err((StatusCode::BAD_REQUEST, "Bad client id").into());
     }
@@ -96,7 +91,6 @@ pub async fn login(
     data: extract::Form<AuthFormData>,
     qs: extract::Query<AuthQueryString>,
 ) -> response::Result<impl IntoResponse> {
-    // TODO(stvn): Put into config
     if data.password != GLOBAL_PASSWORD {
         return Err((StatusCode::UNAUTHORIZED, "Bad password").into());
     }
@@ -157,7 +151,7 @@ pub async fn has_valid_auth<B>(
         .flat_map(|value| value.to_str().unwrap_or("").split(';'))
     {
         if let Ok(cookie) = Cookie::parse(c) {
-            if cookie.name() == "auth" {
+            if cookie.name() == AUTH_COOKIE_NAME {
                 let payload = Payload::from_token(cookie.value(), HMAC_SECRET)?;
                 if payload.valid_at(OffsetDateTime::now_utc())? {
                     return Ok(next.run(req).await);
@@ -179,42 +173,98 @@ pub async fn has_valid_auth<B>(
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "grant_type", rename_all = "snake_case")]
 enum GrantType {
-    AuthorizationCode,
+    AuthorizationCode {
+        // When grant_type=authorization_code, this parameter is the code Google received from either your sign-in or token exchange endpoint.
+        code: String,
+        // When grant_type=authorization_code, this parameter is the URL used in the initial authorization request.
+        redirect_uri: String,
+    },
+    RefreshToken {
+        // When grant_type=refresh_token, this parameter is the refresh token Google received from your token exchange endpoint.
+        refresh_token: String,
+    },
 }
 #[derive(Deserialize)]
-#[allow(dead_code)]
-struct TokenInfo {
+pub struct TokenInfo {
     // A string that identifies the request origin as Google. This string must be registered within your system as Google's unique identifier.
     client_id: String,
     // A secret string that you registered with Google for your service.
     client_secret: String,
     // The type of token being exchanged. It's either authorization_code or refresh_token.
+    #[serde(flatten)]
     grant_type: GrantType,
-    // When grant_type=authorization_code, this parameter is the code Google received from either your sign-in or token exchange endpoint.
-    code: String,
-    // When grant_type=authorization_code, this parameter is the URL used in the initial authorization request.
-    redirect_uri: String,
-    // When grant_type=refresh_token, this parameter is the refresh token Google received from your token exchange endpoint.
-    refresh_token: String,
 }
 
-#[allow(dead_code)]
-struct Token {
-    token_type: String,
-    access_token: String,
-    expires_in: u32,
-}
-
-pub async fn token(_: extract::Query<AuthInfo>) -> impl IntoResponse {
-    // if info.user_locale != ENGLISH_LOCALE {
-    //     return Err(error::ErrorBadRequest("Non-english locale"));
-    // }
+pub async fn token(info: extract::Form<TokenInfo>) -> response::Result<impl IntoResponse> {
     // https://developers.google.com/assistant/smarthome/develop/implement-oauth#implement_oauth_account_linking
-    // Todo: Verify that the client_id identifies the request origin as an authorized origin, and that the client_secret matches the expected value.
-    // Verify that the authorization code is valid and not expired, and that the client ID specified in the request matches the client ID associated with the authorization code.
-    // If you can't verify all of the above criteria, return an HTTP 400 Bad Request error with {"error": "invalid_grant"} as the body.
-    // Otherwise, use the user ID from the refresh token to generate an access token. These tokens can be any string value, but they must uniquely represent the user and the client the token is for, and they must not be guessable. For access tokens, also record the expiration time of the token, typically an hour after you issue the token.
-    StatusCode::NOT_IMPLEMENTED
+    if info.client_id != CLIENT_ID {
+        return Err((StatusCode::BAD_REQUEST, "Bad client id").into());
+    }
+    if info.client_secret != CLIENT_SECRET {
+        return Err((StatusCode::BAD_REQUEST, "Bad client id").into());
+    }
+    let now = OffsetDateTime::now_utc();
+
+    match &info.grant_type {
+        GrantType::AuthorizationCode { code, redirect_uri } => {
+            if !REDIRECTS.contains(&redirect_uri.as_str()) {
+                return Err((StatusCode::BAD_REQUEST, "Bad redirect id").into());
+            }
+
+            let payload = Payload::from_token(&code, HMAC_SECRET)?;
+            if !payload.valid_at(now)? {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    response::Json(json!({"error":"invalid_grant"})),
+                )
+                    .into());
+            }
+
+            let access_token: String = Payload::new()
+                .with_issuer(ISSUER_NAME.into())
+                .with_not_before(now)?
+                .with_expiration(now + Duration::from_secs(3600))?
+                .with_issued_at(now)?
+                .to_token(Algorithm::HS256, HMAC_SECRET)?;
+
+            let refresh_token: String = Payload::new()
+                .with_issuer(ISSUER_NAME.into())
+                .with_not_before(now)?
+                .with_issued_at(now)?
+                .with_expiration(now + Duration::from_secs(3600 * 24 * 7 * 365 * 10))?
+                .to_token(Algorithm::HS256, HMAC_SECRET)?;
+
+            Ok(response::Json(json!({
+                "token_type": "Bearer",
+                "access_token": access_token,
+                "refresh_token":refresh_token,
+                "expires_in":3600,
+            })))
+        }
+        GrantType::RefreshToken { refresh_token } => {
+            let payload = Payload::from_token(&refresh_token, HMAC_SECRET)?;
+            if !payload.valid_at(now)? {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    response::Json(json!({"error":"invalid_grant"})),
+                )
+                    .into());
+            }
+
+            let access_token: String = Payload::new()
+                .with_issuer(ISSUER_NAME.into())
+                .with_not_before(now)?
+                .with_expiration(now + Duration::from_secs(3600))?
+                .with_issued_at(now)?
+                .to_token(Algorithm::HS256, HMAC_SECRET)?;
+
+            Ok(response::Json(json!({
+                "token_type": "Bearer",
+                "access_token": access_token,
+                "expires_in":3600,
+            })))
+        }
+    }
 }

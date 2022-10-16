@@ -23,16 +23,11 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use tower_http::trace::{DefaultMakeSpan, TraceLayer};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 
 const DEVICE_ID: &str = "1";
 
 async fn index() -> impl IntoResponse {
-    // if !auth::has_valid_auth(&req).unwrap_or(false) {
-    //     return HttpResponse::Found()
-    //         .header("Location", "/login?redirect=%2F")
-    //         .finish();
-    // }
     response::Html(include_str!("index.html"))
 }
 
@@ -289,14 +284,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/auth", routing::get(auth::auth))
         .route_layer(middleware::from_fn(auth::has_valid_auth))
         .route("/login", routing::get(auth::login_page).post(auth::login))
-        .route("/token", routing::get(auth::token))
+        .route("/token", routing::post(auth::token))
         .layer(extract::Extension(conn))
         .layer(
-            TraceLayer::new_for_http().make_span_with(
-                DefaultMakeSpan::new()
-                    .include_headers(true)
-                    .level(tracing::Level::INFO),
-            ),
+            TraceLayer::new_for_http()
+                .make_span_with(
+                    DefaultMakeSpan::new()
+                        .include_headers(true)
+                        .level(tracing::Level::INFO),
+                )
+                .on_response(
+                    DefaultOnResponse::new()
+                        .include_headers(true)
+                        .level(tracing::Level::INFO),
+                ),
         );
 
     info!("Starting server...");
