@@ -212,7 +212,7 @@ where
 {
     let r = func();
     match r {
-        Err(nix::Error::Sys(Errno::EINTR)) => retry(func),
+        Err(Errno::EINTR) => retry(func),
         _ => r,
     }
 }

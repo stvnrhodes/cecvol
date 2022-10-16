@@ -2,6 +2,9 @@ pub mod noop;
 pub mod vchi;
 pub mod vchiq_ioctl;
 
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::response::Response;
 use log::{debug, info};
 use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
 use std::array::TryFromSliceError;
@@ -255,7 +258,6 @@ pub enum CECError {
 }
 
 impl std::error::Error for CECError {}
-impl actix_http::ResponseError for CECError {}
 impl fmt::Display for CECError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
@@ -268,6 +270,12 @@ impl fmt::Display for CECError {
 impl From<Error> for CECError {
     fn from(err: Error) -> Self {
         Self::ParsingError(err)
+    }
+}
+
+impl IntoResponse for CECError {
+    fn into_response(self) -> Response {
+        StatusCode::IM_A_TEAPOT.into_response()
     }
 }
 

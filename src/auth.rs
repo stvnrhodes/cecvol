@@ -1,12 +1,20 @@
 mod jwt;
 
-use actix_web::{
-    error, get, http, post, web, HttpMessage, HttpRequest, HttpResponse, Responder, Result,
-};
+use axum::extract;
+use axum::http::header;
+use axum::http::Request;
+use axum::http::StatusCode;
+use axum::middleware;
+use axum::response;
+use axum::response::Html;
+use axum::response::IntoResponse;
+use axum::response::Response;
+use cookie::Cookie;
 use jwt::{Algorithm, Payload};
 use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
 use serde::Deserialize;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
+use time::OffsetDateTime;
 
 const ENGLISH_LOCALE: &str = "en";
 const AUTH_COOKIE_NAME: &str = "auth";
@@ -24,7 +32,7 @@ const REDIRECTS: [&str; 2] = [
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
-struct AuthInfo {
+pub struct AuthInfo {
     // The Google client ID you registered with Google.
     client_id: String,
     // The URL to which you send the response to this request.
@@ -39,30 +47,18 @@ struct AuthInfo {
     user_locale: String,
 }
 
-#[get("/auth")]
-async fn auth(req: HttpRequest, info: web::Query<AuthInfo>) -> impl Responder {
+pub async fn auth(info: extract::Query<AuthInfo>) -> response::Result<impl IntoResponse> {
     if info.user_locale != ENGLISH_LOCALE {
-        return Err(error::ErrorBadRequest("Non-english locale"));
+        return Err((StatusCode::BAD_REQUEST, "Non-english locale").into());
     }
     if info.client_id != CLIENT_ID {
-        return Err(error::ErrorBadRequest("Bad client id"));
-    }
-    if !has_valid_auth(&req).unwrap_or(false) {
-        return Ok(HttpResponse::Found()
-            .header(
-                "Location",
-                format!(
-                    "/login?redirect={}",
-                    utf8_percent_encode(req.path(), NON_ALPHANUMERIC)
-                ),
-            )
-            .finish());
+        return Err((StatusCode::BAD_REQUEST, "Bad client id").into());
     }
     if !REDIRECTS.contains(&info.redirect_uri.as_str()) {
-        return Err(error::ErrorBadRequest("Bad redirect id"));
+        return Err((StatusCode::BAD_REQUEST, "Bad redirect id").into());
     }
 
-    let now = SystemTime::now();
+    let now = time::OffsetDateTime::now_utc();
     let expiration = now + Duration::from_secs(10 * 60);
     let payload: String = Payload::new()
         .with_issuer(ISSUER_NAME.into())
@@ -71,43 +67,41 @@ async fn auth(req: HttpRequest, info: web::Query<AuthInfo>) -> impl Responder {
         .with_issued_at(now)?
         .to_token(Algorithm::HS256, HMAC_SECRET)?;
 
-    Ok(HttpResponse::Found()
-        .header(
-            "Location",
+    Ok((
+        StatusCode::FOUND,
+        [(
+            header::LOCATION,
             format!(
                 "{}?code={}&state={}",
                 info.redirect_uri, payload, info.state
             ),
-        )
-        .finish())
+        )],
+    ))
 }
 
-#[get("/login")]
-async fn login_page() -> impl Responder {
-    let resp: &'static [u8] = include_bytes!("auth.html");
-    HttpResponse::Ok().content_type("text/html").body(resp)
+pub async fn login_page() -> impl IntoResponse {
+    Html(include_str!("auth.html"))
 }
 
 #[derive(Deserialize)]
-struct AuthFormData {
+pub struct AuthFormData {
     password: String,
 }
 #[derive(Deserialize)]
-struct AuthQueryString {
+pub struct AuthQueryString {
     redirect: Option<String>,
 }
 
-#[post("/login")]
-async fn login(
-    data: web::Form<AuthFormData>,
-    qs: web::Query<AuthQueryString>,
-) -> Result<HttpResponse> {
+pub async fn login(
+    data: extract::Form<AuthFormData>,
+    qs: extract::Query<AuthQueryString>,
+) -> response::Result<impl IntoResponse> {
     // TODO(stvn): Put into config
     if data.password != GLOBAL_PASSWORD {
-        return Ok(HttpResponse::Unauthorized().body("Bad password"));
+        return Err((StatusCode::UNAUTHORIZED, "Bad password").into());
     }
 
-    let now = SystemTime::now();
+    let now = time::OffsetDateTime::now_utc();
     let expiration = now + Duration::from_secs(24 * 7 * 60 * 60);
     let payload: String = Payload::new()
         // TODO(stvn): Put into config
@@ -117,25 +111,32 @@ async fn login(
         .with_issued_at(now)?
         .to_token(Algorithm::HS256, HMAC_SECRET)?;
 
-    Ok(HttpResponse::Found()
-        .header(
-            "Location",
-            qs.redirect.as_ref().unwrap_or(&"/".to_string()).clone(),
-        )
-        .cookie(
-            http::Cookie::build(AUTH_COOKIE_NAME, payload)
-                .expires(expiration.into())
-                .path("/")
-                // TODO(stvn): Configure this
-                //.secure(true)
-                .http_only(true)
-                .finish(),
-        )
-        .finish())
+    Ok((
+        StatusCode::FOUND,
+        [
+            (
+                header::LOCATION,
+                qs.redirect.as_ref().unwrap_or(&"/".to_string()).clone(),
+            ),
+            (
+                header::SET_COOKIE,
+                Cookie::build(AUTH_COOKIE_NAME, payload)
+                    .expires(expiration)
+                    .path("/")
+                    // TODO(stvn): Configure this
+                    //.secure(true)
+                    .http_only(true)
+                    .finish()
+                    .to_string(),
+            ),
+        ],
+    ))
 }
 
-// TODO(stvn): Turn into middleware
-pub fn has_valid_auth(req: &HttpRequest) -> Result<bool, jwt::Error> {
+pub async fn has_valid_auth<B>(
+    req: Request<B>,
+    next: middleware::Next<B>,
+) -> response::Result<Response> {
     if let Some(header) = req.headers().get("Authorization") {
         let payload = Payload::from_token(
             header
@@ -145,20 +146,37 @@ pub fn has_valid_auth(req: &HttpRequest) -> Result<bool, jwt::Error> {
                 .unwrap_or(""),
             HMAC_SECRET,
         )?;
-        return payload.valid_at(SystemTime::now());
+        if payload.valid_at(OffsetDateTime::now_utc())? {
+            return Ok(next.run(req).await);
+        }
     }
-    if let Some(cookie) = req.cookie("auth") {
-        let payload = Payload::from_token(cookie.value(), HMAC_SECRET)?;
-        return payload.valid_at(SystemTime::now());
+    for c in req.headers().get_all(header::COOKIE) {
+        if let Ok(cookie) = Cookie::parse(c.to_str().unwrap_or("")) {
+            if cookie.name() == "auth" {
+                let payload = Payload::from_token(cookie.value(), HMAC_SECRET)?;
+                if payload.valid_at(OffsetDateTime::now_utc())? {
+                    return Ok(next.run(req).await);
+                }
+            }
+        }
     }
-    Ok(false)
+    Ok((
+        StatusCode::FOUND,
+        [(
+            header::LOCATION,
+            format!(
+                "/login?redirect={}",
+                utf8_percent_encode(req.uri().path(), NON_ALPHANUMERIC)
+            ),
+        )],
+    )
+        .into_response())
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum GrantType {
     AuthorizationCode,
-    RefreshToken,
 }
 #[derive(Deserialize)]
 #[allow(dead_code)]
@@ -184,15 +202,14 @@ struct Token {
     expires_in: u32,
 }
 
-#[get("/token")]
-async fn token(info: web::Query<AuthInfo>) -> impl Responder {
-    if info.user_locale != ENGLISH_LOCALE {
-        return Err(error::ErrorBadRequest("Non-english locale"));
-    }
+pub async fn token(_: extract::Query<AuthInfo>) -> impl IntoResponse {
+    // if info.user_locale != ENGLISH_LOCALE {
+    //     return Err(error::ErrorBadRequest("Non-english locale"));
+    // }
     // https://developers.google.com/assistant/smarthome/develop/implement-oauth#implement_oauth_account_linking
     // Todo: Verify that the client_id identifies the request origin as an authorized origin, and that the client_secret matches the expected value.
     // Verify that the authorization code is valid and not expired, and that the client ID specified in the request matches the client ID associated with the authorization code.
     // If you can't verify all of the above criteria, return an HTTP 400 Bad Request error with {"error": "invalid_grant"} as the body.
     // Otherwise, use the user ID from the refresh token to generate an access token. These tokens can be any string value, but they must uniquely represent the user and the client the token is for, and they must not be guessable. For access tokens, also record the expiration time of the token, typically an hour after you issue the token.
-    Ok("Unimplemented")
+    StatusCode::NOT_IMPLEMENTED
 }

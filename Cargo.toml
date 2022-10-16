@@ -8,23 +8,23 @@ description = "Allow external control of CEC commands to TV"
 edition = "2021"
 
 [dependencies]
-actix = "0.10"
-actix-web = "3.1"
-actix-http = "2.0"
-base64 = "0.13"
-log = "0.4"
-lazy_static = "1.4"
-libc = "0.2"
-nix = "0.18"
-num_enum = "0.5"
-percent-encoding = "2.1"
-serde = { version = "1.0", features = ["derive"] } 
-serde_json = "1.0"
-sha2 = "0.9"
-env_logger = "0.7"
-thiserror = "1.0"
-tokio= { version="0.2", features=["time"] }
+axum = "0.5.16"
+base64 = "0.13.0"
 clap = { version = "4.0.15", features = ["derive"] }
+cookie = "0.16.1"
+env_logger = "0.9.1"
+lazy_static = "1.4.0"
+libc = "0.2.135"
+log = "0.4.17"
+nix = "0.25.0"
+num_enum = "0.5.7"
+percent-encoding = "2.2.0"
+serde = { version = "1.0.145", features = ["derive"] }
+serde_json = "1.0.86"
+sha2 = "0.10.6"
+thiserror = "1.0.37"
+time = "0.3.15"
+tokio = { version = "1.21.2", features = ["full"] }
 
 [package.metadata.deb]
 maintainer-scripts = "debian/"

@@ -7,7 +7,13 @@ use action::devices::{
     DeviceState, ErrorCodes, Execution, FulfillmentRequest, FulfillmentResponse, InputKey,
     InputNames, RequestPayload,
 };
-use actix_web::{middleware, post, web, App, HttpRequest, HttpResponse, HttpServer, Responder};
+use axum::extract;
+use axum::http::StatusCode;
+use axum::middleware;
+use axum::response;
+use axum::response::IntoResponse;
+use axum::routing;
+use axum::Router;
 use clap::Parser;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
@@ -20,15 +26,13 @@ use std::time::Duration;
 
 const DEVICE_ID: &str = "1";
 
-async fn index(req: HttpRequest) -> impl Responder {
-    if !auth::has_valid_auth(&req).unwrap_or(false) {
-        return HttpResponse::Found()
-            .header("Location", "/login?redirect=%2F")
-            .finish();
-    }
-    let resp: &'static [u8] = include_bytes!("index.html");
-    //.set_header(http::header::CONTENT_TYPE, "text/html; charset=UTF-8")
-    HttpResponse::Ok().content_type("text/html").body(resp)
+async fn index() -> impl IntoResponse {
+    // if !auth::has_valid_auth(&req).unwrap_or(false) {
+    //     return HttpResponse::Found()
+    //         .header("Location", "/login?redirect=%2F")
+    //         .finish();
+    // }
+    response::Html(include_str!("index.html"))
 }
 
 fn device_state(cec: &cec::CEC) -> DeviceState {
@@ -41,16 +45,10 @@ fn device_state(cec: &cec::CEC) -> DeviceState {
     }
 }
 
-#[post("/fulfillment")]
 async fn fulfillment(
-    full_req: HttpRequest,
-    req: web::Json<FulfillmentRequest>,
-    cec: web::Data<Mutex<cec::CEC>>,
-) -> Result<web::Json<FulfillmentResponse>, actix_web::Error> {
-    if !auth::has_valid_auth(&full_req).unwrap_or(false) {
-        return Err(HttpResponse::Unauthorized().into());
-    }
-
+    req: extract::Json<FulfillmentRequest>,
+    cec: extract::Extension<Arc<Mutex<cec::CEC>>>,
+) -> response::Result<response::Json<FulfillmentResponse>> {
     let request_id = req.request_id.clone();
     for input in &req.inputs {
         match input {
@@ -68,7 +66,7 @@ async fn fulfillment(
                         }],
                     })
                     .collect();
-                return Ok(web::Json(FulfillmentResponse {
+                return Ok(response::Json(FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
                         // TODO(stvn): Switch to oauth identity
@@ -124,7 +122,7 @@ async fn fulfillment(
                             .insert(DEVICE_ID.to_string(), device_state(&cec.lock().unwrap()));
                     }
                 }
-                return Ok(web::Json(FulfillmentResponse {
+                return Ok(response::Json(FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
                         "devices": device_data,
@@ -150,17 +148,14 @@ async fn fulfillment(
                             }
                             Execution::WakeOnLan => {
                                 // TODO(stvn): Don't hard-code
-                                wol::wake([0x24, 0x4b, 0xfe, 0x55, 0x78, 0x94])?;
+                                wol::wake([0x24, 0x4b, 0xfe, 0x55, 0x78, 0x94])
+                                    .map_err(|_| StatusCode::IM_A_TEAPOT)?;
                             }
                             Execution::SetInput { new_input } => {
-                                if !cec.is_on() {
-                                    cec.on_off(true)?;
-                                    tokio::time::delay_for(Duration::from_millis(4000)).await;
-                                }
                                 cec.set_input(new_input)?;
                             }
                             _ => {
-                                return Ok(web::Json(FulfillmentResponse {
+                                return Ok(response::Json(FulfillmentResponse {
                                     request_id: request_id,
                                     payload: json!({
                                         "errorCode": ErrorCodes::NotSupported,
@@ -170,7 +165,7 @@ async fn fulfillment(
                             }
                         }
                         // TODO(stvn): Do all executions in the array, improve error handling
-                        return Ok(web::Json(FulfillmentResponse {
+                        return Ok(response::Json(FulfillmentResponse {
                             request_id: request_id,
                             payload: json!({
                                 "commands": [
@@ -189,7 +184,7 @@ async fn fulfillment(
         }
     }
 
-    Ok(web::Json(FulfillmentResponse {
+    Ok(response::Json(FulfillmentResponse {
         request_id: request_id,
         payload: json!({
             "errorCode": ErrorCodes::NotSupported,
@@ -205,18 +200,17 @@ pub struct ExecRequest {
 #[derive(Serialize)]
 pub struct ExecResponse {}
 
-#[post("/cecexec")]
 async fn cecexec(
-    req: web::Json<ExecRequest>,
-    cec: web::Data<Mutex<cec::CEC>>,
-) -> Result<web::Json<ExecResponse>, actix_web::Error> {
+    req: extract::Json<ExecRequest>,
+    cec: extract::Extension<Arc<Mutex<cec::CEC>>>,
+) -> response::Result<response::Json<ExecResponse>> {
     let cmd: Vec<u8> = req
         .cmd
         .split(":")
         .map(|s| u8::from_str_radix(s, 16).unwrap_or(0))
         .collect();
     cec.lock().unwrap().transmit_raw(&cmd)?;
-    Ok(web::Json(ExecResponse {}))
+    Ok(response::Json(ExecResponse {}))
 }
 
 #[derive(Parser, Debug)]
@@ -231,10 +225,11 @@ struct Args {
     use_fake_cec_conn: bool,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
-    env_logger::from_env(env_logger::Env::default().default_filter_or("debug"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
         .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
         .init();
 
@@ -274,7 +269,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ("Serpens", 0x4000),
         ],
     )?;
-    let conn = web::Data::new(Mutex::new(cec_conn));
+
+    let conn = Arc::new(Mutex::new(cec_conn));
 
     let thread_conn = conn.clone();
     thread::spawn(move || {
@@ -284,31 +280,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         thread::sleep(Duration::from_secs(100));
     });
-    actix_web::rt::System::new("main").block_on(async move {
-        debug!("Starting server...");
-        HttpServer::new(move || {
-            App::new()
-                .app_data(conn.clone())
-                .wrap(middleware::Logger::default())
-                .wrap(middleware::Compress::default())
-                .service(fulfillment)
-                .service(cecexec)
-                .service(auth::auth)
-                .service(auth::login)
-                .service(auth::login_page)
-                .route("/", web::get().to(index))
-        })
-        .bind(args.http_addr)?
-        .run()
-        .await?;
-        Ok(())
-    })
-}
 
-// TODO
-// make screen show state
-// - oauth
-// read in .env
-// custom port #
-// - RoutingChange SetStreamPath set the input
-// maybe send wol packet too?
+    let app = Router::new()
+        .route("/", routing::get(index))
+        .route("/cecexec", routing::post(cecexec))
+        .route("/fulfillment", routing::post(fulfillment))
+        .route("/auth", routing::get(auth::auth))
+        .route_layer(middleware::from_fn(auth::has_valid_auth))
+        .route("/login", routing::get(auth::login_page).post(auth::login))
+        .route("/token", routing::get(auth::token))
+        .layer(extract::Extension(conn));
+
+    debug!("Starting server...");
+    axum::Server::bind(&args.http_addr.parse().unwrap())
+        .serve(app.into_make_service())
+        .await?;
+    Ok(())
+}

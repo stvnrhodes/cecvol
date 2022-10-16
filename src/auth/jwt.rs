@@ -1,7 +1,9 @@
-use actix_web::error::ResponseError;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::time::{SystemTime, SystemTimeError};
+use time::OffsetDateTime;
 
 const OUTER_KEY_PAD: u8 = 0x5c;
 const INNER_KEY_PAD: u8 = 0x36;
@@ -57,7 +59,7 @@ pub struct Payload {
     // a few minutes, to account for clock skew.  Its value MUST be a number
     // containing a NumericDate value.  Use of this claim is OPTIONAL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    exp: Option<u64>,
+    exp: Option<i64>,
 
     // The "nbf" (not before) claim identifies the time before which the JWT
     // MUST NOT be accepted for processing.  The processing of the "nbf"
@@ -67,14 +69,14 @@ pub struct Payload {
     // account for clock skew.  Its value MUST be a number containing a
     // NumericDate value.  Use of this claim is OPTIONAL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    nbf: Option<u64>,
+    nbf: Option<i64>,
 
     // The "iat" (issued at) claim identifies the time at which the JWT was
     // issued.  This claim can be used to determine the age of the JWT.  Its
     // value MUST be a number containing a NumericDate value.  Use of this
     // claim is OPTIONAL.
     #[serde(skip_serializing_if = "Option::is_none")]
-    iat: Option<u64>,
+    iat: Option<i64>,
 
     // The "jti" (JWT ID) claim provides a unique identifier for the JWT.
     // The identifier value MUST be assigned in a manner that ensures that
@@ -102,12 +104,12 @@ pub enum Error {
     Base64Error(#[from] base64::DecodeError),
     #[error("Issue encoding as json")]
     JSONError(#[from] serde_json::Error),
-    #[error("Issue with time")]
-    SystemTimeError(#[from] SystemTimeError),
 }
 
-impl ResponseError for Error {
-    // TODO(stvn): Map errors better
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        StatusCode::IM_A_TEAPOT.into_response()
+    }
 }
 
 fn hmac_sha256(header: impl AsRef<[u8]>, payload: impl AsRef<[u8]>, secret: &str) -> Vec<u8> {
@@ -117,14 +119,15 @@ fn hmac_sha256(header: impl AsRef<[u8]>, payload: impl AsRef<[u8]>, secret: &str
     }
     let outer_key: Vec<u8> = padded_key.iter().map(|x| x ^ OUTER_KEY_PAD).collect();
     let inner_key: Vec<u8> = padded_key.iter().map(|x| x ^ INNER_KEY_PAD).collect();
-    let inner_hash = Sha256::new()
-        .chain(inner_key)
-        .chain(header)
-        .chain(".")
-        .chain(payload)
-        .finalize();
-    let outer_hash = Sha256::new().chain(outer_key).chain(inner_hash).finalize();
-    outer_hash.to_vec()
+    let mut inner_hash = Sha256::new();
+    inner_hash.update(inner_key);
+    inner_hash.update(header);
+    inner_hash.update(".");
+    inner_hash.update(payload);
+    let mut outer_hash = Sha256::new();
+    outer_hash.update(outer_key);
+    outer_hash.update(inner_hash.finalize());
+    outer_hash.finalize().to_vec()
 }
 
 impl Payload {
@@ -145,20 +148,20 @@ impl Payload {
         self.aud = Some(audience);
         self
     }
-    pub fn with_expiration(mut self, expiration: SystemTime) -> Result<Self, Error> {
-        self.exp = Some(expiration.duration_since(SystemTime::UNIX_EPOCH)?.as_secs());
+    pub fn with_expiration(mut self, expiration: OffsetDateTime) -> Result<Self, Error> {
+        self.exp = Some(expiration.unix_timestamp());
         Ok(self)
     }
-    pub fn with_not_before(mut self, not_before: SystemTime) -> Result<Self, Error> {
-        self.nbf = Some(not_before.duration_since(SystemTime::UNIX_EPOCH)?.as_secs());
+    pub fn with_not_before(mut self, not_before: OffsetDateTime) -> Result<Self, Error> {
+        self.nbf = Some(not_before.unix_timestamp());
         Ok(self)
     }
-    pub fn with_issued_at(mut self, issued_at: SystemTime) -> Result<Self, Error> {
-        self.iat = Some(issued_at.duration_since(SystemTime::UNIX_EPOCH)?.as_secs());
+    pub fn with_issued_at(mut self, issued_at: OffsetDateTime) -> Result<Self, Error> {
+        self.iat = Some(issued_at.unix_timestamp());
         Ok(self)
     }
-    pub fn valid_at(&self, time: SystemTime) -> Result<bool, Error> {
-        let time = time.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+    pub fn valid_at(&self, time: OffsetDateTime) -> Result<bool, Error> {
+        let time = time.unix_timestamp();
         Ok(self.iat.unwrap_or(time) <= time
             && self.nbf.unwrap_or(time) <= time
             && self.exp.unwrap_or(time) >= time)
