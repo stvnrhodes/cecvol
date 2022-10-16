@@ -150,8 +150,13 @@ pub async fn has_valid_auth<B>(
             return Ok(next.run(req).await);
         }
     }
-    for c in req.headers().get_all(header::COOKIE) {
-        if let Ok(cookie) = Cookie::parse(c.to_str().unwrap_or("")) {
+    for c in req
+        .headers()
+        .get_all(header::COOKIE)
+        .iter()
+        .flat_map(|value| value.to_str().unwrap_or("").split(';'))
+    {
+        if let Ok(cookie) = Cookie::parse(c) {
             if cookie.name() == "auth" {
                 let payload = Payload::from_token(cookie.value(), HMAC_SECRET)?;
                 if payload.valid_at(OffsetDateTime::now_utc())? {
