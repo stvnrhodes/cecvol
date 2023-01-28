@@ -8,10 +8,12 @@ use action::devices::{
     InputNames, RequestPayload,
 };
 use axum::extract;
+use axum::http::Request;
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::response;
 use axum::response::IntoResponse;
+use axum::response::Response;
 use axum::routing;
 use axum::Router;
 use clap::Parser;
@@ -23,7 +25,6 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
-use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 
 const DEVICE_ID: &str = "1";
 
@@ -209,6 +210,30 @@ async fn cecexec(
     Ok(response::Json(ExecResponse {}))
 }
 
+async fn varz() -> response::Result<impl IntoResponse> {
+    let metrics = prometheus::gather();
+    let encoder = prometheus::TextEncoder::new();
+    encoder
+        .encode_to_string(&metrics)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into())
+}
+
+async fn add_observability<B>(
+    req: Request<B>,
+    next: middleware::Next<B>,
+) -> response::Result<Response> {
+    let path = format!("{:?}", req.uri().path_and_query().unwrap());
+    let resp = next.run(req).await;
+    // /fulfillment 200 {"content-type": "application/json", "content-length": "170"}
+    info!(
+        "{request} {status} {o:?}",
+        request = path,
+        status = resp.status().as_str(),
+        o = resp.body(),
+    );
+    Ok(resp)
+}
+
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -279,26 +304,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/", routing::get(index))
+        .route("/varz", routing::get(varz))
         .route("/cecexec", routing::post(cecexec))
         .route("/fulfillment", routing::post(fulfillment))
         .route("/auth", routing::get(auth::auth))
         .route_layer(middleware::from_fn(auth::has_valid_auth))
         .route("/login", routing::get(auth::login_page).post(auth::login))
         .route("/token", routing::post(auth::token))
-        .layer(extract::Extension(conn))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(
-                    DefaultMakeSpan::new()
-                        .include_headers(true)
-                        .level(tracing::Level::INFO),
-                )
-                .on_response(
-                    DefaultOnResponse::new()
-                        .include_headers(true)
-                        .level(tracing::Level::INFO),
-                ),
-        );
+        .route_layer(middleware::from_fn(add_observability))
+        .layer(extract::Extension(conn));
 
     info!("Starting server...");
     axum::Server::bind(&args.http_addr.parse().unwrap())
