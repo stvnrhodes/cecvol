@@ -2,6 +2,10 @@
 
 Volume control over CEC
 
+![Screenshot of web ui](/docs/screenshot-2023-01-28.png "Screenshot")
+
+There's
+
 ```shell
 sudo apt install cmake libudev-dev g++-arm-linux-gnueabihf
 rustup target add armv7-unknown-linux-gnueabihf
