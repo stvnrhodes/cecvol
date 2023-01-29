@@ -1,15 +1,17 @@
 # CECVol
 
-Volume control over CEC
+Control TV volume control over CEC via a raspberry pi.
 
 ![Screenshot of web ui](/docs/screenshot-2023-01-28.png "Screenshot")
 
-There's
+There's a web ui, a fitbit app, and maybe one day a way to do voice commands.
+
+This only works on a raspberry pi because it directly manipulates .
+
+Use the following command to build a debian package.
 
 ```shell
-sudo apt install cmake libudev-dev g++-arm-linux-gnueabihf
-rustup target add armv7-unknown-linux-gnueabihf
-cargo deb --target=armv7-unknown-linux-gnueabihf
+CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=/usr/bin/arm-linux-gnueabihf-gcc cargo deb --target=armv7-unknown-linux-gnueabihf
 ```
 
 TODO:

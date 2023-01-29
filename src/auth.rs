@@ -88,8 +88,8 @@ pub struct AuthQueryString {
 }
 
 pub async fn login(
-    data: extract::Form<AuthFormData>,
     qs: extract::Query<AuthQueryString>,
+    data: extract::Form<AuthFormData>,
 ) -> response::Result<impl IntoResponse> {
     if data.password != GLOBAL_PASSWORD {
         return Err((StatusCode::UNAUTHORIZED, "Bad password").into());

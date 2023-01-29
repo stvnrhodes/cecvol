@@ -43,8 +43,8 @@ fn device_state(cec: &cec::CEC) -> DeviceState {
 }
 
 async fn fulfillment(
+    cec: extract::State<Arc<Mutex<cec::CEC>>>,
     req: extract::Json<FulfillmentRequest>,
-    cec: extract::Extension<Arc<Mutex<cec::CEC>>>,
 ) -> response::Result<response::Json<FulfillmentResponse>> {
     let request_id = req.request_id.clone();
     for input in &req.inputs {
@@ -198,8 +198,8 @@ pub struct ExecRequest {
 pub struct ExecResponse {}
 
 async fn cecexec(
+    cec: extract::State<Arc<Mutex<cec::CEC>>>,
     req: extract::Json<ExecRequest>,
-    cec: extract::Extension<Arc<Mutex<cec::CEC>>>,
 ) -> response::Result<response::Json<ExecResponse>> {
     let cmd: Vec<u8> = req
         .cmd
@@ -226,10 +226,9 @@ async fn add_observability<B>(
     let resp = next.run(req).await;
     // /fulfillment 200 {"content-type": "application/json", "content-length": "170"}
     info!(
-        "{request} {status} {o:?}",
+        "{request} {status}",
         request = path,
         status = resp.status().as_str(),
-        o = resp.body(),
     );
     Ok(resp)
 }
@@ -312,7 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/login", routing::get(auth::login_page).post(auth::login))
         .route("/token", routing::post(auth::token))
         .route_layer(middleware::from_fn(add_observability))
-        .layer(extract::Extension(conn));
+        .with_state(conn);
 
     info!("Starting server...");
     axum::Server::bind(&args.http_addr.parse().unwrap())

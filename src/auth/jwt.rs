@@ -1,6 +1,8 @@
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
@@ -176,7 +178,7 @@ impl Payload {
         if vec.len() != 3 {
             return Err(Error::WrongNumSections(vec.len()));
         }
-        let header_json = base64::decode_config(vec[0], base64::URL_SAFE_NO_PAD)?;
+        let header_json = URL_SAFE_NO_PAD.decode(vec[0])?;
         let header: Header = serde_json::from_slice(&header_json)?;
         if header.typ != "JWT" {
             return Err(Error::UnknownHeaderType(header.typ));
@@ -184,7 +186,7 @@ impl Payload {
         match header.alg.as_str() {
             "HS256" => {
                 let hash = hmac_sha256(vec[0], vec[1], secret);
-                let want_sig = base64::encode_config(hash, base64::URL_SAFE_NO_PAD);
+                let want_sig = URL_SAFE_NO_PAD.encode(hash);
                 let sig = vec[2];
                 if sig != want_sig {
                     return Err(Error::BadSignature(sig.to_string()));
@@ -195,23 +197,20 @@ impl Payload {
             }
         }
 
-        let payload_json = base64::decode_config(vec[1], base64::URL_SAFE_NO_PAD)?;
+        let payload_json = URL_SAFE_NO_PAD.decode(vec[1])?;
         let payload: Payload = serde_json::from_slice(&payload_json)?;
         Ok(payload)
     }
     pub fn to_token(&self, alg: Algorithm, secret: &str) -> Result<String, Error> {
-        let payload = base64::encode_config(serde_json::to_string(self)?, base64::URL_SAFE_NO_PAD);
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_string(self)?);
         match alg {
             Algorithm::HS256 => {
-                let header = base64::encode_config(
-                    serde_json::to_string(&Header {
-                        alg: "HS256".to_string(),
-                        typ: "JWT".to_string(),
-                    })?,
-                    base64::URL_SAFE_NO_PAD,
-                );
+                let header = URL_SAFE_NO_PAD.encode(serde_json::to_string(&Header {
+                    alg: "HS256".to_string(),
+                    typ: "JWT".to_string(),
+                })?);
                 let hash = hmac_sha256(&header, &payload, secret);
-                let sig = base64::encode_config(hash, base64::URL_SAFE_NO_PAD);
+                let sig = URL_SAFE_NO_PAD.encode(hash);
                 Ok(header + "." + &payload + "." + &sig)
             }
         }
