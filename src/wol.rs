@@ -9,6 +9,6 @@ pub fn wake(mac_address: [u8; 6]) -> std::io::Result<()> {
         data.extend(&mac_address);
     }
     socket.set_broadcast(true)?;
-    socket.send_to(&data, "255.255.255.255:7")?;
+    socket.send_to(&data, "192.168.86.255:7")?;
     Ok(())
 }

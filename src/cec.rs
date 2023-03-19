@@ -2,6 +2,8 @@ pub mod noop;
 pub mod vchi;
 pub mod vchiq_ioctl;
 
+use crate::tv;
+use crate::tv::TVError;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Response;
@@ -279,6 +281,12 @@ impl IntoResponse for CECError {
     }
 }
 
+impl From<CECError> for TVError {
+    fn from(err: CECError) -> Self {
+        Self::Other(Box::new(err))
+    }
+}
+
 type PhysicalAddress = u16;
 fn physical_address_from_bytes(b: &[u8]) -> Result<PhysicalAddress, TryFromSliceError> {
     Ok(u16::from_be_bytes(b.try_into()?))
@@ -541,13 +549,33 @@ pub trait CECConnection: Sync + Send {
     fn set_rx_callback(&self, func: Box<dyn FnMut(&CECCommand) + Send>);
 }
 
+impl tv::TVConnection for CEC {
+    fn power_on(&self) -> Result<(), TVError> {
+        Ok(self.on_off(true)?)
+    }
+    fn power_off(&self) -> Result<(), TVError> {
+        Ok(self.on_off(false)?)
+    }
+    fn vol_up(&self) -> Result<(), TVError> {
+        Ok(self.volume_change(1)?)
+    }
+    fn vol_down(&self) -> Result<(), TVError> {
+        Ok(self.volume_change(-1)?)
+    }
+    fn mute(&self, mute: bool) -> Result<(), TVError> {
+        Ok(self.mute(mute)?)
+    }
+    // DO NOT SUBMIT
+    fn input(&self, input: tv::Input) -> Result<(), TVError> {
+        Ok(self.set_input("")?)
+    }
+}
+
 pub struct CEC {
     conn: Arc<dyn CECConnection>,
     tx_signal: Arc<(Mutex<Option<CECCommand>>, Condvar)>,
 
     // Internal state.
-    muted_state: bool,
-    vol_level: i32,
     power_state: Arc<Mutex<bool>>,
     input_state: Arc<Mutex<PhysicalAddress>>,
     input_names: Arc<Mutex<HashMap<String, PhysicalAddress>>>,
@@ -715,8 +743,6 @@ impl CEC {
         let mut cec = CEC {
             conn,
             tx_signal,
-            muted_state: false,
-            vol_level: 15,
             input_names: input_names,
             input_state: input_state,
             power_state: power_state,
@@ -782,11 +808,7 @@ impl CEC {
         self.transmit(LogicalAddress::TV, CECMessage::UserControlReleased)
     }
 
-    pub fn set_volume_level(&mut self, level: i32) -> Result<(), CECError> {
-        self.volume_change(level - self.vol_level)
-    }
-
-    pub fn volume_change(&mut self, relative_steps: i32) -> Result<(), CECError> {
+    pub fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
         if relative_steps > 0 {
             for _ in 0..relative_steps {
                 self.press_key(UserControl::VolumeUp)?;
@@ -796,11 +818,10 @@ impl CEC {
                 self.press_key(UserControl::VolumeDown)?;
             }
         }
-        self.vol_level = cmp::min(cmp::max(self.vol_level + relative_steps, 0), 100);
         Ok(())
     }
 
-    pub fn mute(&mut self, mute: bool) -> Result<(), CECError> {
+    pub fn mute(&self, mute: bool) -> Result<(), CECError> {
         // Volume changes always cause the tv to become unmuted, so use them to
         // force the tv into the proper state.
         if mute {
@@ -812,10 +833,9 @@ impl CEC {
             self.volume_change(-1)?;
             self.volume_change(1)?;
         }
-        self.muted_state = mute;
         Ok(())
     }
-    pub fn on_off(&mut self, on: bool) -> Result<(), CECError> {
+    pub fn on_off(&self, on: bool) -> Result<(), CECError> {
         *self.power_state.lock().unwrap() = on;
         if on {
             self.transmit(LogicalAddress::TV, CECMessage::ImageViewOn)
@@ -848,12 +868,6 @@ impl CEC {
         Ok(())
     }
 
-    pub fn current_volume(&self) -> i32 {
-        self.vol_level
-    }
-    pub fn is_muted(&self) -> bool {
-        self.muted_state
-    }
     pub fn is_on(&self) -> bool {
         *self.power_state.lock().unwrap()
     }

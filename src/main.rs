@@ -1,6 +1,8 @@
 mod action;
 mod auth;
 mod cec;
+mod lgip;
+mod tv;
 mod wol;
 
 use action::devices::{
@@ -35,8 +37,8 @@ async fn index() -> impl IntoResponse {
 fn device_state(cec: &cec::CEC) -> DeviceState {
     DeviceState {
         online: Some(true),
-        current_volume: Some(cec.current_volume()),
-        is_muted: Some(cec.is_muted()),
+        current_volume: None, //Some(cec.current_volume()),
+        is_muted: None,       //Some(cec.is_muted()),
         on: Some(cec.is_on()),
         current_input: Some(format!("{:x}", cec.current_input())),
     }
@@ -131,9 +133,9 @@ async fn fulfillment(
                 for c in commands {
                     for e in &c.execution {
                         match e {
-                            Execution::SetVolume { volume_level } => {
-                                cec.set_volume_level(*volume_level)?;
-                            }
+                            // Execution::SetVolume { volume_level } => {
+                            //     cec.set_volume_level(*volume_level)?;
+                            // }
                             Execution::VolumeRelative { relative_steps } => {
                                 cec.volume_change(*relative_steps)?;
                             }
