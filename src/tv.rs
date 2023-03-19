@@ -14,6 +14,13 @@ impl fmt::Display for TVError {
         }
     }
 }
+
+impl From<std::io::Error> for TVError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Other(Box::new(err))
+    }
+}
+
 // impl IntoResponse for TVError {
 //     fn into_response(self) -> Response {
 //         StatusCode::IM_A_TEAPOT.into_response()
@@ -27,7 +34,7 @@ pub enum Input {
     HDMI4,
 }
 
-pub trait TVConnection: Sync + Send {
+pub trait TVConnection {
     fn power_on(&self) -> Result<(), TVError>;
     fn power_off(&self) -> Result<(), TVError>;
     fn vol_up(&self) -> Result<(), TVError>;
