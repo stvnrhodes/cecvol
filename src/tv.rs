@@ -1,6 +1,7 @@
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Response;
+use log::error;
 use std::fmt;
 
 #[derive(Debug)]
@@ -25,6 +26,7 @@ impl From<std::io::Error> for TVError {
 
 impl IntoResponse for TVError {
     fn into_response(self) -> Response {
+        error!("{}", self);
         StatusCode::IM_A_TEAPOT.into_response()
     }
 }

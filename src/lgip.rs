@@ -3,10 +3,13 @@ use crate::tv::TVError;
 use crate::wol;
 use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyInit, KeyIvInit};
 use block_padding::{NoPadding, Pkcs7};
+use log::info;
 use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2;
 use std::convert::TryInto;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::{
     io,
     net::{IpAddr, UdpSocket},
@@ -85,16 +88,16 @@ impl LGTV {
         Ok(plaintext.to_string())
     }
     pub fn send_command(&self, cmd: &str) -> io::Result<String> {
-        let socket = UdpSocket::bind("0.0.0.0:0")?;
-        socket.connect((self.ip_addr, LG_CONTROL_PORT))?;
-        socket.set_read_timeout(Some(Duration::new(10, 0)))?;
+        let addr = SocketAddr::from((self.ip_addr, LG_CONTROL_PORT));
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))?;
         let payload = self.encrypt(cmd);
-        socket.send(&payload)?;
+        stream.write(&payload)?;
         let mut resp = [0; 512];
-        let len = socket.recv(&mut resp)?;
-        let decrypted = self.decrypt(&resp[..len]);
+        let len = stream.read(&mut resp)?;
         // TODO: Convert error
-        Ok(decrypted.unwrap())
+        let decrypted = self.decrypt(&resp[..len]).unwrap();
+        info!("{}", decrypted);
+        Ok(decrypted)
     }
 }
 
