@@ -33,16 +33,7 @@ pub struct LGTV {
     derived_key: [u8; ENCRYPTION_KEY_LENGTH],
 }
 
-// info!("faking command {:?}", cmd);
-
 fn derived_key(keycode: &str) -> [u8; ENCRYPTION_KEY_LENGTH] {
-    // return pbkdf2Sync(
-    //     keycode,
-    //     Buffer.from(settings.encryptionKeySalt),
-    //     settings.encryptionKeyIterations,
-    //     settings.encryptionKeyLength,
-    //     settings.encryptionKeyDigest,
-    //   );
     let mut buf = [0; ENCRYPTION_KEY_LENGTH];
     pbkdf2_hmac::<sha2::Sha256>(
         keycode.as_bytes(),
@@ -108,20 +99,24 @@ impl LGTV {
 }
 
 impl tv::TVConnection for LGTV {
-    fn power_on(&self) -> Result<(), TVError> {
-        wol::wake(self.mac_address)?;
+    fn on_off(&self, on: bool) -> Result<(), TVError> {
+        if on {
+            wol::wake(self.mac_address)?;
+        } else {
+            self.send_command("POWER off\r")?;
+        }
         Ok(())
     }
-    fn power_off(&self) -> Result<(), TVError> {
-        self.send_command("POWER off\r")?;
-        Ok(())
-    }
-    fn vol_up(&self) -> Result<(), TVError> {
-        self.send_command("KEY_ACTION volumeup\r")?;
-        Ok(())
-    }
-    fn vol_down(&self) -> Result<(), TVError> {
-        self.send_command("KEY_ACTION volumedown\r")?;
+    fn volume_change(&self, relative_steps: i32) -> Result<(), TVError> {
+        if relative_steps < 0 {
+            for _ in 0..-relative_steps {
+                self.send_command("KEY_ACTION volumedown\r")?;
+            }
+        } else if relative_steps > 0 {
+            for _ in 0..relative_steps {
+                self.send_command("KEY_ACTION volumeup\r")?;
+            }
+        }
         Ok(())
     }
     fn mute(&self, mute: bool) -> Result<(), TVError> {
@@ -130,7 +125,7 @@ impl tv::TVConnection for LGTV {
         self.send_command(&cmd)?;
         Ok(())
     }
-    fn input(&self, input: tv::Input) -> Result<(), TVError> {
+    fn set_input(&self, input: tv::Input) -> Result<(), TVError> {
         let input = match input {
             tv::Input::HDMI1 => "hdmi1",
             tv::Input::HDMI2 => "hdmi2",
@@ -142,33 +137,6 @@ impl tv::TVConnection for LGTV {
         Ok(())
     }
 }
-
-// message INPUT_SELECT hdmi1
-// iv <Buffer 2d df 1f 39 e3 f6 ee c0 2d 1b c3 e4 d8 cb 6d 0a>
-// preparedMessage INPUT_SELECT hdmi1
-// derivedKey <Buffer a4 73 89 da 2c 83 d0 9a 9c 8d 05 a8 28 e7 f6 5c>
-// ivEnc <Buffer ff 77 d9 42 7b d3 03 b1 57 cd b3 3a 77 41 2a 3d>
-// dataEnc <Buffer 41 f4 ca 01 09 36 d3 72 a0 24 2b cb 48 a1 89 8d 8a 9a 23 89 14 ab 42 39 25 8f c4 a6 4e da b8 a7>
-// cipher <Buffer af 5b e7 25 f6 26 7b 8a 8a 1a 31 11 65 a5 ec 53 44 cd bd c0 34 ab 3b 19 f3 05 12 d7 d3 34 e3 30>
-// ivRecv <Buffer 3e 53 c1 04 7d bf f9 11 ef 14 41 7c 71 0f 70 4e>
-// decrypted OK
-
-// iv <Buffer 82 f2 9e 11 c1 00 d5 3f 7b 14 fe 18 29 c3 42 f9>
-// preparedMessage VOLUME_CONTROL 11
-// derivedKey <Buffer a4 73 89 da 2c 83 d0 9a 9c 8d 05 a8 28 e7 f6 5c>
-// ivEnc <Buffer 54 09 f1 0b d3 9b 41 67 c3 98 1f b1 71 2e 1c a8>
-// dataEnc <Buffer 52 3d 15 71 e8 7e fb c4 44 ba cc c0 b6 ca b0 eb dc 80 53 41 a1 18 a4 b3 8d 7a 4e f4 94 17 b7 0d>
-// cipher <Buffer c0 bb 05 47 98 6f 20 5d eb 67 35 ad 07 45 89 d5 fa de 82 cd 0d 11 50 b0 da 7f c0 2e b7 24 24 26>
-// ivRecv <Buffer 86 e6 08 6b 04 cf 4b 26 3b 77 24 6c bd 8b e0 b1>
-
-// iv <Buffer f3 b0 0d 21 c4 5e 98 0a e9 99 dd 2f 90 87 30 4b>
-// preparedMessage VOLUME_CONTROL 11
-// derivedKey <Buffer a4 73 89 da 2c 83 d0 9a 9c 8d 05 a8 28 e7 f6 5c>
-// ivEnc <Buffer 94 3c 62 c1 d4 a5 d0 71 7d 29 2b f6 5e 9d 8a f6>
-// dataEnc <Buffer 99 a6 1f 23 54 fa f8 d8 a9 90 ac 24 66 4a e9 47 5d 50 ea 43 8a cb 37 bd 5e 39 a2 bf 06 1d 23 1f>
-// cipher <Buffer 69 f2 7c 71 43 c3 59 a5 ce ee 1e 04 ba 22 05 86 51 62 a2 7f 14 2e 35 c5 ad ca 68 50 00 88 5a ae>
-// ivRecv <Buffer 64 de d3 4a c7 12 ae 14 dd 71 f6 0e 2d 30 df 9a>
-// decrypted OK
 
 #[cfg(test)]
 mod tests {

@@ -10,8 +10,6 @@ use axum::response::Response;
 use log::info;
 use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
 use std::array::TryFromSliceError;
-use std::cmp;
-use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::str;
@@ -550,24 +548,17 @@ pub trait CECConnection: Sync + Send {
 }
 
 impl tv::TVConnection for CEC {
-    fn power_on(&self) -> Result<(), TVError> {
-        Ok(self.on_off(true)?)
+    fn on_off(&self, on: bool) -> Result<(), TVError> {
+        Ok(self.on_off(on)?)
     }
-    fn power_off(&self) -> Result<(), TVError> {
-        Ok(self.on_off(false)?)
-    }
-    fn vol_up(&self) -> Result<(), TVError> {
-        Ok(self.volume_change(1)?)
-    }
-    fn vol_down(&self) -> Result<(), TVError> {
-        Ok(self.volume_change(-1)?)
+    fn volume_change(&self, relative_steps: i32) -> Result<(), TVError> {
+        Ok(self.volume_change(relative_steps)?)
     }
     fn mute(&self, mute: bool) -> Result<(), TVError> {
         Ok(self.mute(mute)?)
     }
-    // DO NOT SUBMIT
-    fn input(&self, input: tv::Input) -> Result<(), TVError> {
-        Ok(self.set_input("")?)
+    fn set_input(&self, input: tv::Input) -> Result<(), TVError> {
+        Ok(self.set_input(input)?)
     }
 }
 
@@ -578,7 +569,6 @@ pub struct CEC {
     // Internal state.
     power_state: Arc<Mutex<bool>>,
     input_state: Arc<Mutex<PhysicalAddress>>,
-    input_names: Arc<Mutex<HashMap<String, PhysicalAddress>>>,
 }
 
 impl CEC {
@@ -586,19 +576,13 @@ impl CEC {
         conn: Arc<dyn CECConnection>,
         osd_name: &str,
         vendor_id: u32,
-        initial_input_names: &[(&str, PhysicalAddress)],
     ) -> Result<Self, CECError> {
         let tx_signal = Arc::new((Mutex::new(None), Condvar::new()));
         let power_state = Arc::new(Mutex::new(false));
         let input_state = Arc::new(Mutex::new(0));
-        let input_names = Arc::new(Mutex::new(HashMap::new()));
-        for (k, v) in initial_input_names {
-            input_names.lock().unwrap().insert(k.to_string(), *v);
-        }
         let inner_tx_signal = tx_signal.clone();
         let inner_conn = conn.clone();
         let inner_input_state = input_state.clone();
-        let inner_input_names = input_names.clone();
         let inner_power_state = power_state.clone();
         let osd_name = osd_name.to_string();
         let mut logical_to_physical = [0; 0xf];
@@ -642,12 +626,6 @@ impl CEC {
                         },
                     })
                     .unwrap(),
-                CECMessage::SetOSDName { name } => {
-                    inner_input_names.lock().unwrap().insert(
-                        name.to_string(),
-                        logical_to_physical[msg.initiator.unwrap() as usize],
-                    );
-                }
                 CECMessage::ReportPhysicalAddress {
                     physical_address, ..
                 } => {
@@ -743,7 +721,6 @@ impl CEC {
         let mut cec = CEC {
             conn,
             tx_signal,
-            input_names: input_names,
             input_state: input_state,
             power_state: power_state,
         };
@@ -843,13 +820,13 @@ impl CEC {
             self.transmit(LogicalAddress::TV, CECMessage::Standby)
         }
     }
-    pub fn set_input(&self, new_input: &str) -> Result<(), CECError> {
-        let new_addr = *self
-            .input_names
-            .lock()
-            .unwrap()
-            .get(new_input)
-            .ok_or(CECError::UnknownInputDevice(new_input.into()))?;
+    pub fn set_input(&self, new_input: tv::Input) -> Result<(), CECError> {
+        let new_addr = match new_input {
+            tv::Input::HDMI1 => 0x1000,
+            tv::Input::HDMI2 => 0x2000,
+            tv::Input::HDMI3 => 0x3000,
+            tv::Input::HDMI4 => 0x4000,
+        };
         self.broadcast(CECMessage::ReportPhysicalAddress {
             physical_address: new_addr,
             device_type: DeviceType::RecordingDevice,
@@ -873,15 +850,6 @@ impl CEC {
     }
     pub fn current_input(&self) -> PhysicalAddress {
         *self.input_state.lock().unwrap()
-    }
-    pub fn names_by_addr(&self) -> HashMap<PhysicalAddress, Vec<String>> {
-        let mut map = HashMap::new();
-        for (name, &addr) in self.input_names.lock().unwrap().iter() {
-            let mut v = map.remove(&addr).unwrap_or(vec![]);
-            v.push(name.clone());
-            map.insert(addr, v);
-        }
-        map
     }
 }
 

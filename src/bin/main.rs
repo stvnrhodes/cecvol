@@ -1,9 +1,9 @@
-mod action;
-mod auth;
-mod cec;
-mod lgip;
-mod tv;
-mod wol;
+use cecvol::action;
+use cecvol::auth;
+use cecvol::cec;
+use cecvol::lgip;
+use cecvol::tv;
+use cecvol::wol;
 
 use action::devices::{
     DeviceState, ErrorCodes, Execution, FulfillmentRequest, FulfillmentResponse, InputKey,
@@ -19,52 +19,28 @@ use axum::response::Response;
 use axum::routing;
 use axum::Router;
 use clap::Parser;
-use log::{error, info};
+use log::info;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::net::IpAddr;
+use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::thread;
-use std::time::Duration;
 
 const DEVICE_ID: &str = "1";
 
 async fn index() -> impl IntoResponse {
-    response::Html(include_str!("index.html"))
-}
-
-fn device_state(cec: &cec::CEC) -> DeviceState {
-    DeviceState {
-        online: Some(true),
-        current_volume: None, //Some(cec.current_volume()),
-        is_muted: None,       //Some(cec.is_muted()),
-        on: Some(cec.is_on()),
-        current_input: Some(format!("{:x}", cec.current_input())),
-    }
+    response::Html(include_str!("../index.html"))
 }
 
 async fn fulfillment(
-    cec: extract::State<Arc<Mutex<cec::CEC>>>,
+    cec: extract::State<Arc<Mutex<Box<dyn tv::TVConnection + Sync + Send>>>>,
     req: extract::Json<FulfillmentRequest>,
 ) -> response::Result<response::Json<FulfillmentResponse>> {
     let request_id = req.request_id.clone();
     for input in &req.inputs {
         match input {
             RequestPayload::Sync => {
-                let inputs: Vec<InputKey> = cec
-                    .lock()
-                    .unwrap()
-                    .names_by_addr()
-                    .iter()
-                    .map(|(addr, names)| InputKey {
-                        key: format!("{:x}", addr),
-                        names: vec![InputNames {
-                            lang: "en".into(),
-                            name_synonym: names.to_vec(),
-                        }],
-                    })
-                    .collect();
                 return Ok(response::Json(FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
@@ -96,7 +72,8 @@ async fn fulfillment(
                                     "availableApplications": [],
                                     "commandOnlyInputSelector": true,
                                     "orderedInputs": false,
-                                    "availableInputs": inputs,
+                                    // TODO
+                                    // "availableInputs": inputs,
                                     "supportActivityState": false,
                                     "supportPlaybackState": false,
                                     "commandOnlyOnOff": true,
@@ -114,17 +91,12 @@ async fn fulfillment(
                 }));
             }
             RequestPayload::Query { devices } => {
-                let mut device_data = HashMap::new();
-                for device in devices {
-                    if device.id == DEVICE_ID {
-                        device_data
-                            .insert(DEVICE_ID.to_string(), device_state(&cec.lock().unwrap()));
-                    }
-                }
+                // let mut device_data = HashMap::new();
                 return Ok(response::Json(FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
-                        "devices": device_data,
+                        // TODO
+                        // "devices": device_data,
                     }),
                 }));
             }
@@ -133,9 +105,6 @@ async fn fulfillment(
                 for c in commands {
                     for e in &c.execution {
                         match e {
-                            // Execution::SetVolume { volume_level } => {
-                            //     cec.set_volume_level(*volume_level)?;
-                            // }
                             Execution::VolumeRelative { relative_steps } => {
                                 cec.volume_change(*relative_steps)?;
                             }
@@ -151,7 +120,22 @@ async fn fulfillment(
                                     .map_err(|_| StatusCode::IM_A_TEAPOT)?;
                             }
                             Execution::SetInput { new_input } => {
-                                cec.set_input(new_input)?;
+                                let input = match new_input.as_str() {
+                                    "1" | "HDMI 1" => tv::Input::HDMI1,
+                                    "2" | "HDMI 2" => tv::Input::HDMI2,
+                                    "3" | "HDMI 3" => tv::Input::HDMI3,
+                                    "4" | "HDMI 4" => tv::Input::HDMI4,
+                                    _ => {
+                                        return Ok(response::Json(FulfillmentResponse {
+                                            request_id: request_id,
+                                            payload: json!({
+                                                "errorCode": ErrorCodes::NotSupported,
+                                                "debugString": "unsupported input",
+                                            }),
+                                        }))
+                                    }
+                                };
+                                cec.set_input(input)?;
                             }
                             _ => {
                                 return Ok(response::Json(FulfillmentResponse {
@@ -171,7 +155,7 @@ async fn fulfillment(
                                     {
                                         "ids":  c.devices.iter().map(|d| d.id.clone()).collect::<Vec<String>>(),
                                         "status": "SUCCESS",
-                                        "states": device_state(&cec)
+                                        // "states": device_state(&cec)
                                     }
                                 ],
                             }),
@@ -198,19 +182,6 @@ pub struct ExecRequest {
 }
 #[derive(Serialize)]
 pub struct ExecResponse {}
-
-async fn cecexec(
-    cec: extract::State<Arc<Mutex<cec::CEC>>>,
-    req: extract::Json<ExecRequest>,
-) -> response::Result<response::Json<ExecResponse>> {
-    let cmd: Vec<u8> = req
-        .cmd
-        .split(":")
-        .map(|s| u8::from_str_radix(s, 16).unwrap_or(0))
-        .collect();
-    cec.lock().unwrap().transmit_raw(&cmd)?;
-    Ok(response::Json(ExecResponse {}))
-}
 
 async fn varz() -> response::Result<impl IntoResponse> {
     let metrics = prometheus::gather();
@@ -245,6 +216,10 @@ struct Args {
     /// If true, use a fake cec connection instead of directly using the hardware.
     #[arg(long)]
     use_fake_cec_conn: bool,
+
+    /// If true, control over ip.
+    #[arg(long)]
+    use_lg_ip_control: bool,
 }
 
 #[tokio::main]
@@ -255,58 +230,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
         .init();
 
-    info!("Creating CEC connection...");
-    let osd_name = "cecvol";
-    // LG's vendor code seems to be required for UserControl commands to work.
-    let vendor_id = 0x00e091;
-    let vchi: Arc<dyn cec::CECConnection> = if args.use_fake_cec_conn {
-        Arc::new(cec::noop::LogOnlyConn {})
+    let tv: Box<dyn tv::TVConnection + Sync + Send> = if args.use_lg_ip_control {
+        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 86, 39));
+        Box::new(lgip::LGTV::new(
+            addr,
+            [0x64, 0x95, 0x6c, 0x06, 0x84, 0x98],
+            "0J8FOLOW",
+        ))
     } else {
-        let vchi = cec::vchi::HardwareInterface::init()?;
-        vchi.set_osd_name(osd_name)?;
-        vchi.set_vendor_id(vendor_id)?;
+        info!("Creating CEC connection...");
+        let osd_name = "cecvol";
+        // LG's vendor code seems to be required for UserControl commands to work.
+        let vendor_id = 0x00e091;
+        let vchi: Arc<dyn cec::CECConnection> = if args.use_fake_cec_conn {
+            Arc::new(cec::noop::LogOnlyConn {})
+        } else {
+            let vchi = cec::vchi::HardwareInterface::init()?;
+            vchi.set_osd_name(osd_name)?;
+            vchi.set_vendor_id(vendor_id)?;
 
-        if vchi.get_logical_addr()? == cec::LogicalAddress::Broadcast
-            && vchi.get_physical_addr()? != 0xffff
-        {
-            vchi.alloc_logical_addr()?;
-        }
-        Arc::new(vchi)
+            if vchi.get_logical_addr()? == cec::LogicalAddress::Broadcast
+                && vchi.get_physical_addr()? != 0xffff
+            {
+                vchi.alloc_logical_addr()?;
+            }
+            Arc::new(vchi)
+        };
+        let cec_conn = cec::CEC::new(vchi, osd_name, vendor_id)?;
+        cec_conn.poll_all()?;
+        Box::new(cec_conn)
     };
-    let cec_conn = cec::CEC::new(
-        vchi,
-        osd_name,
-        vendor_id,
-        &[
-            ("HDMI 1", 0x1000),
-            ("HDMI 2", 0x2000),
-            ("HDMI 3", 0x3000),
-            ("HDMI 4", 0x4000),
-            ("1", 0x1000),
-            ("2", 0x2000),
-            ("3", 0x3000),
-            ("4", 0x4000),
-            ("NintendoSwitch", 0x2000),
-            ("PC", 0x4000),
-            ("Serpens", 0x4000),
-        ],
-    )?;
 
-    let conn = Arc::new(Mutex::new(cec_conn));
-
-    let thread_conn = conn.clone();
-    thread::spawn(move || {
-        match thread_conn.lock().unwrap().poll_all() {
-            Ok(()) => {}
-            Err(e) => error!("{}", e),
-        }
-        thread::sleep(Duration::from_secs(100));
-    });
+    let conn: Arc<Mutex<Box<dyn tv::TVConnection + Sync + Send>>> = Arc::new(Mutex::new(tv));
 
     let app = Router::new()
         .route("/", routing::get(index))
         .route("/varz", routing::get(varz))
-        .route("/cecexec", routing::post(cecexec))
         .route("/fulfillment", routing::post(fulfillment))
         .route("/auth", routing::get(auth::auth))
         .route_layer(middleware::from_fn(auth::has_valid_auth))

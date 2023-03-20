@@ -1,4 +1,6 @@
-// use axum::response::IntoResponse;
+use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum::response::Response;
 use std::fmt;
 
 #[derive(Debug)]
@@ -21,11 +23,11 @@ impl From<std::io::Error> for TVError {
     }
 }
 
-// impl IntoResponse for TVError {
-//     fn into_response(self) -> Response {
-//         StatusCode::IM_A_TEAPOT.into_response()
-//     }
-// }
+impl IntoResponse for TVError {
+    fn into_response(self) -> Response {
+        StatusCode::IM_A_TEAPOT.into_response()
+    }
+}
 
 pub enum Input {
     HDMI1,
@@ -35,10 +37,8 @@ pub enum Input {
 }
 
 pub trait TVConnection {
-    fn power_on(&self) -> Result<(), TVError>;
-    fn power_off(&self) -> Result<(), TVError>;
-    fn vol_up(&self) -> Result<(), TVError>;
-    fn vol_down(&self) -> Result<(), TVError>;
+    fn on_off(&self, on: bool) -> Result<(), TVError>;
+    fn volume_change(&self, relative_steps: i32) -> Result<(), TVError>;
     fn mute(&self, mute: bool) -> Result<(), TVError>;
-    fn input(&self, input: Input) -> Result<(), TVError>;
+    fn set_input(&self, input: Input) -> Result<(), TVError>;
 }
