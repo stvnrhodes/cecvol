@@ -1,6 +1,6 @@
 [package]
 name = "cecvol"
-version = "0.1.3"
+version = "0.2.0"
 authors = ["Steven Rhodes <rhodes.steven@gmail.com>"]
 license = "MIT"
 readme = "README.md"
@@ -8,19 +8,25 @@ description = "Allow external control of CEC commands to TV"
 edition = "2021"
 
 [dependencies]
+aes = "0.8.2"
 axum = "0.6.4"
 axum-macros = "0.3.2"
 base64 = "0.21.0"
+block-padding = "0.3.2"
+cbc = "0.1.2"
 clap = { version = "4.0.15", features = ["derive"] }
 cookie = "0.17.0"
+ecb = { version = "0.1.1", features = ["alloc", "block-padding"] }
 env_logger = "0.10.0"
 lazy_static = "1.4.0"
 libc = "0.2.135"
 log = "0.4.17"
 nix = "0.26.2"
 num_enum = "0.5.7"
+pbkdf2 = { version = "0.12.1", features = ["hmac"] }
 percent-encoding = "2.2.0"
 prometheus = { version = "0.13.2", features = ["process"] }
+rand = { version = "0.8.5", features = ["std_rng"] }
 serde = { version = "1.0.145", features = ["derive"] }
 serde_json = "1.0.86"
 sha2 = "0.10.6"

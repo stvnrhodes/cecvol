@@ -4,9 +4,8 @@ After=network.target
 
 [Service]
 DynamicUser=yes
-SupplementaryGroups=video
 Restart=on-failure
-ExecStart=/usr/bin/cecvol
+ExecStart=/usr/bin/cecvol --use-lg-ip-control
 
 [Install]
 WantedBy=multi-user.target

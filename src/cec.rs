@@ -2,14 +2,14 @@ pub mod noop;
 pub mod vchi;
 pub mod vchiq_ioctl;
 
+use crate::tv;
+use crate::tv::TVError;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::response::Response;
 use log::info;
 use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
 use std::array::TryFromSliceError;
-use std::cmp;
-use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::str;
@@ -279,6 +279,12 @@ impl IntoResponse for CECError {
     }
 }
 
+impl From<CECError> for TVError {
+    fn from(err: CECError) -> Self {
+        Self::Other(Box::new(err))
+    }
+}
+
 type PhysicalAddress = u16;
 fn physical_address_from_bytes(b: &[u8]) -> Result<PhysicalAddress, TryFromSliceError> {
     Ok(u16::from_be_bytes(b.try_into()?))
@@ -541,16 +547,28 @@ pub trait CECConnection: Sync + Send {
     fn set_rx_callback(&self, func: Box<dyn FnMut(&CECCommand) + Send>);
 }
 
+impl tv::TVConnection for CEC {
+    fn on_off(&mut self, on: bool) -> Result<(), TVError> {
+        Ok(self.on_off(on)?)
+    }
+    fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError> {
+        Ok(self.volume_change(relative_steps)?)
+    }
+    fn mute(&mut self, mute: bool) -> Result<(), TVError> {
+        Ok(self.mute(mute)?)
+    }
+    fn set_input(&mut self, input: tv::Input) -> Result<(), TVError> {
+        Ok(self.set_input(input)?)
+    }
+}
+
 pub struct CEC {
     conn: Arc<dyn CECConnection>,
     tx_signal: Arc<(Mutex<Option<CECCommand>>, Condvar)>,
 
     // Internal state.
-    muted_state: bool,
-    vol_level: i32,
     power_state: Arc<Mutex<bool>>,
     input_state: Arc<Mutex<PhysicalAddress>>,
-    input_names: Arc<Mutex<HashMap<String, PhysicalAddress>>>,
 }
 
 impl CEC {
@@ -558,19 +576,13 @@ impl CEC {
         conn: Arc<dyn CECConnection>,
         osd_name: &str,
         vendor_id: u32,
-        initial_input_names: &[(&str, PhysicalAddress)],
     ) -> Result<Self, CECError> {
         let tx_signal = Arc::new((Mutex::new(None), Condvar::new()));
         let power_state = Arc::new(Mutex::new(false));
         let input_state = Arc::new(Mutex::new(0));
-        let input_names = Arc::new(Mutex::new(HashMap::new()));
-        for (k, v) in initial_input_names {
-            input_names.lock().unwrap().insert(k.to_string(), *v);
-        }
         let inner_tx_signal = tx_signal.clone();
         let inner_conn = conn.clone();
         let inner_input_state = input_state.clone();
-        let inner_input_names = input_names.clone();
         let inner_power_state = power_state.clone();
         let osd_name = osd_name.to_string();
         let mut logical_to_physical = [0; 0xf];
@@ -614,12 +626,6 @@ impl CEC {
                         },
                     })
                     .unwrap(),
-                CECMessage::SetOSDName { name } => {
-                    inner_input_names.lock().unwrap().insert(
-                        name.to_string(),
-                        logical_to_physical[msg.initiator.unwrap() as usize],
-                    );
-                }
                 CECMessage::ReportPhysicalAddress {
                     physical_address, ..
                 } => {
@@ -715,9 +721,6 @@ impl CEC {
         let mut cec = CEC {
             conn,
             tx_signal,
-            muted_state: false,
-            vol_level: 15,
-            input_names: input_names,
             input_state: input_state,
             power_state: power_state,
         };
@@ -782,10 +785,6 @@ impl CEC {
         self.transmit(LogicalAddress::TV, CECMessage::UserControlReleased)
     }
 
-    pub fn set_volume_level(&mut self, level: i32) -> Result<(), CECError> {
-        self.volume_change(level - self.vol_level)
-    }
-
     pub fn volume_change(&mut self, relative_steps: i32) -> Result<(), CECError> {
         if relative_steps > 0 {
             for _ in 0..relative_steps {
@@ -796,7 +795,6 @@ impl CEC {
                 self.press_key(UserControl::VolumeDown)?;
             }
         }
-        self.vol_level = cmp::min(cmp::max(self.vol_level + relative_steps, 0), 100);
         Ok(())
     }
 
@@ -812,7 +810,6 @@ impl CEC {
             self.volume_change(-1)?;
             self.volume_change(1)?;
         }
-        self.muted_state = mute;
         Ok(())
     }
     pub fn on_off(&mut self, on: bool) -> Result<(), CECError> {
@@ -823,13 +820,13 @@ impl CEC {
             self.transmit(LogicalAddress::TV, CECMessage::Standby)
         }
     }
-    pub fn set_input(&self, new_input: &str) -> Result<(), CECError> {
-        let new_addr = *self
-            .input_names
-            .lock()
-            .unwrap()
-            .get(new_input)
-            .ok_or(CECError::UnknownInputDevice(new_input.into()))?;
+    pub fn set_input(&mut self, new_input: tv::Input) -> Result<(), CECError> {
+        let new_addr = match new_input {
+            tv::Input::HDMI1 => 0x1000,
+            tv::Input::HDMI2 => 0x2000,
+            tv::Input::HDMI3 => 0x3000,
+            tv::Input::HDMI4 => 0x4000,
+        };
         self.broadcast(CECMessage::ReportPhysicalAddress {
             physical_address: new_addr,
             device_type: DeviceType::RecordingDevice,
@@ -848,26 +845,11 @@ impl CEC {
         Ok(())
     }
 
-    pub fn current_volume(&self) -> i32 {
-        self.vol_level
-    }
-    pub fn is_muted(&self) -> bool {
-        self.muted_state
-    }
     pub fn is_on(&self) -> bool {
         *self.power_state.lock().unwrap()
     }
     pub fn current_input(&self) -> PhysicalAddress {
         *self.input_state.lock().unwrap()
-    }
-    pub fn names_by_addr(&self) -> HashMap<PhysicalAddress, Vec<String>> {
-        let mut map = HashMap::new();
-        for (name, &addr) in self.input_names.lock().unwrap().iter() {
-            let mut v = map.remove(&addr).unwrap_or(vec![]);
-            v.push(name.clone());
-            map.insert(addr, v);
-        }
-        map
     }
 }
 
