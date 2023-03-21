@@ -548,16 +548,16 @@ pub trait CECConnection: Sync + Send {
 }
 
 impl tv::TVConnection for CEC {
-    fn on_off(&self, on: bool) -> Result<(), TVError> {
+    fn on_off(&mut self, on: bool) -> Result<(), TVError> {
         Ok(self.on_off(on)?)
     }
-    fn volume_change(&self, relative_steps: i32) -> Result<(), TVError> {
+    fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError> {
         Ok(self.volume_change(relative_steps)?)
     }
-    fn mute(&self, mute: bool) -> Result<(), TVError> {
+    fn mute(&mut self, mute: bool) -> Result<(), TVError> {
         Ok(self.mute(mute)?)
     }
-    fn set_input(&self, input: tv::Input) -> Result<(), TVError> {
+    fn set_input(&mut self, input: tv::Input) -> Result<(), TVError> {
         Ok(self.set_input(input)?)
     }
 }
@@ -785,7 +785,7 @@ impl CEC {
         self.transmit(LogicalAddress::TV, CECMessage::UserControlReleased)
     }
 
-    pub fn volume_change(&self, relative_steps: i32) -> Result<(), CECError> {
+    pub fn volume_change(&mut self, relative_steps: i32) -> Result<(), CECError> {
         if relative_steps > 0 {
             for _ in 0..relative_steps {
                 self.press_key(UserControl::VolumeUp)?;
@@ -798,7 +798,7 @@ impl CEC {
         Ok(())
     }
 
-    pub fn mute(&self, mute: bool) -> Result<(), CECError> {
+    pub fn mute(&mut self, mute: bool) -> Result<(), CECError> {
         // Volume changes always cause the tv to become unmuted, so use them to
         // force the tv into the proper state.
         if mute {
@@ -812,7 +812,7 @@ impl CEC {
         }
         Ok(())
     }
-    pub fn on_off(&self, on: bool) -> Result<(), CECError> {
+    pub fn on_off(&mut self, on: bool) -> Result<(), CECError> {
         *self.power_state.lock().unwrap() = on;
         if on {
             self.transmit(LogicalAddress::TV, CECMessage::ImageViewOn)
@@ -820,7 +820,7 @@ impl CEC {
             self.transmit(LogicalAddress::TV, CECMessage::Standby)
         }
     }
-    pub fn set_input(&self, new_input: tv::Input) -> Result<(), CECError> {
+    pub fn set_input(&mut self, new_input: tv::Input) -> Result<(), CECError> {
         let new_addr = match new_input {
             tv::Input::HDMI1 => 0x1000,
             tv::Input::HDMI2 => 0x2000,

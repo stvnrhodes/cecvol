@@ -8,13 +8,10 @@ use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2;
 use std::convert::TryInto;
+use std::io;
 use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
-use std::{
-    io,
-    net::{IpAddr, UdpSocket},
-    time::Duration,
-};
+use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::time::Duration;
 
 // Protocol logic is ported from https://github.com/WesSouza/lgtv-ip-control
 
@@ -25,8 +22,6 @@ const ENCRYPTION_KEY_SALT: &[u8] = &[
 const ENCRYPTION_IV_LENGTH: usize = 16;
 const ENCRYPTION_KEY_LENGTH: usize = 16;
 const ENCRYPTION_KEY_ITERATIONS: u32 = 1 << 14;
-const MESSAGE_BLOCK_SIZE: usize = 16;
-const MESSAGE_TERMINATOR: char = '\r';
 const RESPONSE_TERMINATOR: u8 = b'\n';
 // encryptionKeyDigest: "sha256",
 
@@ -102,7 +97,7 @@ impl LGTV {
 }
 
 impl tv::TVConnection for LGTV {
-    fn on_off(&self, on: bool) -> Result<(), TVError> {
+    fn on_off(&mut self, on: bool) -> Result<(), TVError> {
         if on {
             wol::wake(self.mac_address)?;
         } else {
@@ -110,7 +105,7 @@ impl tv::TVConnection for LGTV {
         }
         Ok(())
     }
-    fn volume_change(&self, relative_steps: i32) -> Result<(), TVError> {
+    fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError> {
         if relative_steps < 0 {
             for _ in 0..-relative_steps {
                 self.send_command("KEY_ACTION volumedown\r")?;
@@ -122,13 +117,13 @@ impl tv::TVConnection for LGTV {
         }
         Ok(())
     }
-    fn mute(&self, mute: bool) -> Result<(), TVError> {
+    fn mute(&mut self, mute: bool) -> Result<(), TVError> {
         let m = if mute { "on" } else { "off" };
         let cmd = format!("VOLUME_MUTE {m}\r");
         self.send_command(&cmd)?;
         Ok(())
     }
-    fn set_input(&self, input: tv::Input) -> Result<(), TVError> {
+    fn set_input(&mut self, input: tv::Input) -> Result<(), TVError> {
         let input = match input {
             tv::Input::HDMI1 => "hdmi1",
             tv::Input::HDMI2 => "hdmi2",

@@ -39,8 +39,8 @@ pub enum Input {
 }
 
 pub trait TVConnection {
-    fn on_off(&self, on: bool) -> Result<(), TVError>;
-    fn volume_change(&self, relative_steps: i32) -> Result<(), TVError>;
-    fn mute(&self, mute: bool) -> Result<(), TVError>;
-    fn set_input(&self, input: Input) -> Result<(), TVError>;
+    fn on_off(&mut self, on: bool) -> Result<(), TVError>;
+    fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError>;
+    fn mute(&mut self, mute: bool) -> Result<(), TVError>;
+    fn set_input(&mut self, input: Input) -> Result<(), TVError>;
 }

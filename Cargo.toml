@@ -1,6 +1,6 @@
 [package]
 name = "cecvol"
-version = "0.1.3"
+version = "0.2.0"
 authors = ["Steven Rhodes <rhodes.steven@gmail.com>"]
 license = "MIT"
 readme = "README.md"

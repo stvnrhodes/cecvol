@@ -6,8 +6,7 @@ use cecvol::tv;
 use cecvol::wol;
 
 use action::devices::{
-    DeviceState, ErrorCodes, Execution, FulfillmentRequest, FulfillmentResponse, InputKey,
-    InputNames, RequestPayload,
+    ErrorCodes, Execution, FulfillmentRequest, FulfillmentResponse, RequestPayload,
 };
 use axum::extract;
 use axum::http::Request;
@@ -20,7 +19,6 @@ use axum::routing;
 use axum::Router;
 use clap::Parser;
 use log::info;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::net::IpAddr;
 use std::net::Ipv4Addr;
@@ -90,7 +88,7 @@ async fn fulfillment(
                     }),
                 }));
             }
-            RequestPayload::Query { devices } => {
+            RequestPayload::Query { devices: _ } => {
                 // let mut device_data = HashMap::new();
                 return Ok(response::Json(FulfillmentResponse {
                     request_id: request_id,
@@ -175,13 +173,6 @@ async fn fulfillment(
         }),
     }))
 }
-
-#[derive(Deserialize)]
-pub struct ExecRequest {
-    cmd: String,
-}
-#[derive(Serialize)]
-pub struct ExecResponse {}
 
 async fn varz() -> response::Result<impl IntoResponse> {
     let metrics = prometheus::gather();
