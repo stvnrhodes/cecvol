@@ -11,6 +11,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tv = lgip::LGTV::new(addr, [0x64, 0x95, 0x6c, 0x06, 0x84, 0x98], "0J8FOLOW");
     let mut cmd = args[1..].join(" ");
     cmd.push_str("\r");
-    tv.send_command(&cmd)?;
+    println!("{}", tv.send_command(&cmd)?);
     Ok(())
 }
