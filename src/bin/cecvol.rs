@@ -20,8 +20,6 @@ use axum::Router;
 use clap::Parser;
 use log::info;
 use serde_json::json;
-use std::net::IpAddr;
-use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -222,9 +220,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let tv: Box<dyn tv::TVConnection + Sync + Send> = if args.use_lg_ip_control {
-        let addr = IpAddr::V4(Ipv4Addr::new(192, 168, 86, 39));
         Box::new(lgip::LGTV::new(
-            addr,
+            "LGWebOSTV.local".to_string(),
             [0x64, 0x95, 0x6c, 0x06, 0x84, 0x98],
             "0J8FOLOW",
         ))

@@ -10,7 +10,7 @@ use sha2;
 use std::convert::TryInto;
 use std::io;
 use std::io::{Read, Write};
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::net::{ToSocketAddrs, TcpStream};
 use std::time::Duration;
 
 // Protocol logic is ported from https://github.com/WesSouza/lgtv-ip-control
@@ -26,7 +26,7 @@ const RESPONSE_TERMINATOR: u8 = b'\n';
 // encryptionKeyDigest: "sha256",
 
 pub struct LGTV {
-    ip_addr: IpAddr,
+    addr: String,
     mac_address: [u8; 6],
     derived_key: [u8; ENCRYPTION_KEY_LENGTH],
 }
@@ -43,9 +43,9 @@ fn derived_key(keycode: &str) -> [u8; ENCRYPTION_KEY_LENGTH] {
 }
 
 impl LGTV {
-    pub fn new(ip_addr: IpAddr, mac_address: [u8; 6], keycode: &str) -> Self {
+    pub fn new(addr: String, mac_address: [u8; 6], keycode: &str) -> Self {
         Self {
-            ip_addr,
+            addr,
             mac_address,
             derived_key: derived_key(keycode),
         }
@@ -83,7 +83,7 @@ impl LGTV {
         Ok(plaintext.to_string())
     }
     pub fn send_command(&self, cmd: &str) -> io::Result<String> {
-        let addr = SocketAddr::from((self.ip_addr, LG_CONTROL_PORT));
+        let addr = (self.addr.as_str(), LG_CONTROL_PORT).to_socket_addrs()?.next().unwrap();
         let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))?;
         let payload = self.encrypt(cmd);
         stream.write(&payload)?;
