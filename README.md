@@ -6,7 +6,7 @@ Control TV volume control over CEC via a raspberry pi.
 
 There's a web ui, a fitbit watch app, and maybe one day a way to do voice commands. I've only tried it out with my personal setup of a raspberry pi hooked up to a LG OLED-C9. It works fine except for a quirk where the tv sometimes inappropriately switches to the pi input.
 
-The LG IP code works by opening a TCP connection and sending symmetrically-encrypted packets with simple text commands. See (WesSouza/lgtv-ip-control)[https://github.com/WesSouza/lgtv-ip-control].
+The LG IP code works by opening a TCP connection and sending symmetrically-encrypted packets with simple text commands. See [WesSouza/lgtv-ip-control](https://github.com/WesSouza/lgtv-ip-control).
 
 The CEC code works by calling ioctls on `/dev/vchiq` so it only works on a raspberry pi.
 
