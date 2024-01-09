@@ -151,7 +151,7 @@ impl VchiqIoctls {
         };
 
         retry(|| unsafe { vchiq_ioctl::create_service(self.fd(), &mut service) })?;
-        let mut recovered_userdata = service.service_params.userdata as *mut ServiceUserdata;
+        let recovered_userdata = service.service_params.userdata as *mut ServiceUserdata;
         unsafe { (*recovered_userdata).handle = service.handle };
         retry(|| unsafe { vchiq_ioctl::release_service(self.fd(), service.handle as usize) })?;
         Ok(service.handle)

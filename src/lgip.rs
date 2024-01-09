@@ -10,7 +10,7 @@ use sha2;
 use std::convert::TryInto;
 use std::io;
 use std::io::{Read, Write};
-use std::net::{ToSocketAddrs, TcpStream};
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 // Protocol logic is ported from https://github.com/WesSouza/lgtv-ip-control
@@ -83,7 +83,10 @@ impl LGTV {
         Ok(plaintext.to_string())
     }
     pub fn send_command(&self, cmd: &str) -> io::Result<String> {
-        let addr = (self.addr.as_str(), LG_CONTROL_PORT).to_socket_addrs()?.next().unwrap();
+        let addr = (self.addr.as_str(), LG_CONTROL_PORT)
+            .to_socket_addrs()?
+            .next()
+            .unwrap();
         let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))?;
         let payload = self.encrypt(cmd);
         stream.write(&payload)?;
@@ -138,13 +141,11 @@ impl tv::TVConnection for LGTV {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Ipv4Addr;
-
     use crate::lgip::*;
 
     #[test]
     fn test_derived_key() {
-        let addr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let addr = "127.0.0.1".to_string();
         let tv = LGTV::new(addr, [0; 6], "0J8FOLOW");
         assert_eq!(
             &tv.derived_key,
@@ -157,7 +158,7 @@ mod tests {
 
     #[test]
     fn test_encrypt() {
-        let addr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let addr = "127.0.0.1".to_string();
         let tv = LGTV::new(addr, [0; 6], "0J8FOLOW");
         let iv: &[u8] = &[
             0x82, 0xf2, 0x9e, 0x11, 0xc1, 0x00, 0xd5, 0x3f, 0x7b, 0x14, 0xfe, 0x18, 0x29, 0xc3,
@@ -178,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_decrypt() {
-        let addr = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+        let addr = "127.0.0.1".to_string();
         let tv = LGTV::new(addr, [0; 6], "0J8FOLOW");
         let encrypted: &[u8] = &[
             0xc0, 0xbb, 0x05, 0x47, 0x98, 0x6f, 0x20, 0x5d, 0xeb, 0x67, 0x35, 0xad, 0x07, 0x45,
