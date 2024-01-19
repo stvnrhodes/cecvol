@@ -11,9 +11,7 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,20 +33,23 @@ import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.wear.compose.foundation.ExperimentalWearFoundationApi
+import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
+import androidx.wear.compose.foundation.rememberActiveFocusRequester
 import androidx.wear.compose.material.Button
 import androidx.wear.compose.material.ButtonDefaults
 import androidx.wear.compose.material.Chip
 import androidx.wear.compose.material.Icon
 import androidx.wear.compose.material.MaterialTheme
-import androidx.wear.compose.material.PositionIndicator
 import androidx.wear.compose.material.Scaffold
-import androidx.wear.compose.material.ScalingLazyColumn
 import androidx.wear.compose.material.Text
 import androidx.wear.compose.material.TimeText
 import androidx.wear.compose.material.Vignette
 import androidx.wear.compose.material.VignettePosition
-import androidx.wear.compose.material.rememberScalingLazyListState
 import androidx.wear.compose.material.scrollAway
+import com.google.android.horologist.annotations.ExperimentalHorologistApi
+import com.google.android.horologist.compose.rotaryinput.rotaryWithScroll
 import com.google.gson.Gson
 import com.stevenandbonnie.cecvol.R
 import com.stevenandbonnie.cecvol.presentation.theme.CECVolTheme
@@ -73,6 +74,7 @@ class MainActivity : ComponentActivity() {
   }
 }
 
+@OptIn(ExperimentalHorologistApi::class, ExperimentalWearFoundationApi::class)
 @Composable
 fun WearApp() {
   CECVolTheme {
@@ -80,17 +82,19 @@ fun WearApp() {
     Scaffold(
       timeText = { TimeText(modifier = Modifier.scrollAway(listState)) },
       vignette = { Vignette(vignettePosition = VignettePosition.TopAndBottom) },
-      positionIndicator = { PositionIndicator(scalingLazyListState = listState) }
     ) {
       val contentModifier = Modifier
         .fillMaxWidth()
         .padding(bottom = 8.dp)
       val iconModifier = Modifier
-        .size(24.dp)
+        .size(32.dp)
         .wrapContentSize(align = Alignment.Center)
+      val focusRequester = rememberActiveFocusRequester()
       ScalingLazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 32.dp, start = 8.dp, end = 8.dp, bottom = 32.dp),
+        modifier = Modifier.rotaryWithScroll(
+          scrollableState = listState,
+          focusRequester = focusRequester,
+        ),
         verticalArrangement = Arrangement.Center,
         state = listState
       ) {
@@ -109,15 +113,15 @@ fun WearApp() {
               onClick = {
                 sendPostRequest(
                   Execution(
-                    command = "action.devices.commands.mute",
-                    params = mapOf("mute" to true),
+                    command = "action.devices.commands.OnOff",
+                    params = mapOf("on" to false),
                   )
                 )
               },
             ) {
               Icon(
-                imageVector = Icons.Rounded.VolumeOff,
-                contentDescription = "mute volume",
+                imageVector = Icons.Rounded.PowerOff,
+                contentDescription = "turn off tv",
                 modifier = iconModifier
               )
             }
@@ -126,15 +130,15 @@ fun WearApp() {
               onClick = {
                 sendPostRequest(
                   Execution(
-                    command = "action.devices.commands.volumeRelative",
-                    params = mapOf("relativeSteps" to -1),
+                    command = "action.devices.commands.OnOff",
+                    params = mapOf("on" to true),
                   )
                 )
               },
             ) {
               Icon(
-                imageVector = Icons.Rounded.VolumeDown,
-                contentDescription = "turn volume down",
+                imageVector = Icons.Rounded.Power,
+                contentDescription = "turn on tv",
                 modifier = iconModifier
               )
             }
@@ -186,15 +190,15 @@ fun WearApp() {
               onClick = {
                 sendPostRequest(
                   Execution(
-                    command = "action.devices.commands.OnOff",
-                    params = mapOf("on" to true),
+                    command = "action.devices.commands.volumeRelative",
+                    params = mapOf("relativeSteps" to -1),
                   )
                 )
               },
             ) {
               Icon(
-                imageVector = Icons.Rounded.Power,
-                contentDescription = "turn on tv",
+                imageVector = Icons.Rounded.VolumeDown,
+                contentDescription = "turn volume down",
                 modifier = iconModifier
               )
             }
@@ -229,15 +233,15 @@ fun WearApp() {
               onClick = {
                 sendPostRequest(
                   Execution(
-                    command = "action.devices.commands.OnOff",
-                    params = mapOf("on" to false),
+                    command = "action.devices.commands.mute",
+                    params = mapOf("mute" to true),
                   )
                 )
               },
             ) {
               Icon(
-                imageVector = Icons.Rounded.PowerOff,
-                contentDescription = "turn off tv",
+                imageVector = Icons.Rounded.VolumeOff,
+                contentDescription = "mute volume",
                 modifier = iconModifier
               )
             }
@@ -286,8 +290,7 @@ fun sendPostRequest(cmd: Execution) {
         requestId = "no-id",
         inputs = listOf(
           RequestPayload(
-            intent = "action.devices.EXECUTE",
-            payload = ExecutePayload(
+            intent = "action.devices.EXECUTE", payload = ExecutePayload(
               commands = listOf(
                 ExecuteCommand(
                   devices = listOf(DeviceId(id = "123")),

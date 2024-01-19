@@ -58,6 +58,7 @@ dependencies {
     implementation("androidx.wear.compose:compose-foundation:1.2.1")
     implementation("androidx.wear.compose:compose-material:1.2.1")
     implementation("com.google.android.gms:play-services-wearable:18.1.0")
+    implementation("com.google.android.horologist:horologist-compose-layout:0.5.19")
     implementation("com.google.code.gson:gson:2.10.1")
     implementation(platform("androidx.compose:compose-bom:2023.08.00"))
     androidTestImplementation(platform("androidx.compose:compose-bom:2023.08.00"))
