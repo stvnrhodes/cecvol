@@ -299,7 +299,7 @@ fun sendPostRequest(cmd: Execution) {
         ),
       )
 
-      val wr = OutputStreamWriter(outputStream);
+      val wr = OutputStreamWriter(outputStream)
       val json = Gson().toJson(req)
       wr.write(json)
       wr.flush()
