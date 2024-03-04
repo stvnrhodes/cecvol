@@ -1,5 +1,4 @@
 use cecvol::action;
-use cecvol::auth;
 use cecvol::cec;
 use cecvol::lgip;
 use cecvol::tv;
@@ -30,9 +29,10 @@ async fn index() -> impl IntoResponse {
 }
 
 async fn fulfillment(
-    cec: extract::State<Arc<Mutex<Box<dyn tv::TVConnection + Sync + Send>>>>,
+    app_state: extract::State<AppState>,
     req: extract::Json<FulfillmentRequest>,
 ) -> response::Result<response::Json<FulfillmentResponse>> {
+    let cec = &app_state.cec;
     let request_id = req.request_id.clone();
     for input in &req.inputs {
         match input {
@@ -111,8 +111,7 @@ async fn fulfillment(
                                 cec.on_off(*on)?;
                             }
                             Execution::WakeOnLan => {
-                                // TODO(stvn): Don't hard-code
-                                wol::wake([0x24, 0x4b, 0xfe, 0x55, 0x78, 0x94])
+                                wol::wake(app_state.server_mac_addr)
                                     .map_err(|_| StatusCode::IM_A_TEAPOT)?;
                             }
                             Execution::SetInput { new_input } => {
@@ -209,6 +208,24 @@ struct Args {
     /// If true, control over ip.
     #[arg(long)]
     use_lg_ip_control: bool,
+
+    /// Keycode for pairing the LG tv with the server.
+    #[arg(long, env = "LG_KEYCODE")]
+    lg_keycode: Option<String>,
+
+    /// TV MAC address for WoL, in xx:xx:xx:xx:xx:xx form.
+    #[arg(long, env = "LG_MAC_ADDR")]
+    lg_mac_addr: Option<String>,
+
+    /// Server MAC address for WoL, in xx:xx:xx:xx:xx:xx form.
+    #[arg(long, env = "SERVER_MAC_ADDR")]
+    server_mac_addr: String,
+}
+
+#[derive(Clone)]
+struct AppState {
+    server_mac_addr: [u8; 6],
+    cec: Arc<Mutex<Box<dyn tv::TVConnection + Sync + Send>>>,
 }
 
 #[tokio::main]
@@ -220,10 +237,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let tv: Box<dyn tv::TVConnection + Sync + Send> = if args.use_lg_ip_control {
+        let mut tv_mac_addr = [0u8; 6];
+        for (i, s) in args.lg_mac_addr.unwrap().split(":").enumerate() {
+            tv_mac_addr[i] = u8::from_str_radix(s, 16)?;
+        }
         Box::new(lgip::LGTV::new(
             "LGWebOSTV.local".to_string(),
-            [0x64, 0x95, 0x6c, 0x06, 0x84, 0x98],
-            "0J8FOLOW",
+            tv_mac_addr,
+            &args.lg_keycode.unwrap(),
         ))
     } else {
         info!("Creating CEC connection...");
@@ -251,16 +272,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let conn: Arc<Mutex<Box<dyn tv::TVConnection + Sync + Send>>> = Arc::new(Mutex::new(tv));
 
+    let mut server_mac_addr = [0u8; 6];
+    for (i, s) in args.server_mac_addr.split(":").enumerate() {
+        server_mac_addr[i] = u8::from_str_radix(s, 16)?;
+    }
+    let app_state = AppState {
+        cec: conn,
+        server_mac_addr,
+    };
+
     let app = Router::new()
         .route("/", routing::get(index))
         .route("/varz", routing::get(varz))
         .route("/fulfillment", routing::post(fulfillment))
-        .route("/auth", routing::get(auth::auth))
-        .route_layer(middleware::from_fn(auth::has_valid_auth))
-        .route("/login", routing::get(auth::login_page).post(auth::login))
-        .route("/token", routing::post(auth::token))
         .route_layer(middleware::from_fn(add_observability))
-        .with_state(conn);
+        .with_state(app_state);
 
     info!("Starting server...");
     axum::Server::bind(&args.http_addr.parse().unwrap())
