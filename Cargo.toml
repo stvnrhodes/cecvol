@@ -14,7 +14,7 @@ axum-macros = "0.3.2"
 base64 = "0.21.0"
 block-padding = "0.3.2"
 cbc = "0.1.2"
-clap = { version = "4.0.15", features = ["derive"] }
+clap = { version = "4.0.15", features = ["derive", "env"] }
 cookie = "0.17.0"
 ecb = { version = "0.1.1", features = ["alloc", "block-padding"] }
 env_logger = "0.10.0"
