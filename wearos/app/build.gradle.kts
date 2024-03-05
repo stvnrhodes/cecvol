@@ -51,12 +51,15 @@ android {
 dependencies {
 
     implementation("androidx.activity:activity-compose:1.8.2")
+    implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material:material-icons-extended:1.5.4")
     implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("androidx.wear.compose:compose-foundation:1.2.1")
     implementation("androidx.wear.compose:compose-material:1.2.1")
+    implementation("androidx.wear:wear-input:1.2.0-alpha02")
+    implementation("androidx.wear:wear-tooling-preview:1.0.0")
     implementation("com.google.android.gms:play-services-wearable:18.1.0")
     implementation("com.google.android.horologist:horologist-compose-layout:0.5.19")
     implementation("com.google.code.gson:gson:2.10.1")

@@ -6,10 +6,19 @@
 
 package com.stevenandbonnie.cecvol.presentation
 
+import android.app.Activity
+import android.app.RemoteInput
+import android.content.Context
+import android.content.Intent
 import android.os.Bundle
+import android.util.Base64
 import android.util.Log
+import android.view.inputmethod.EditorInfo
+import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,8 +26,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.Power
 import androidx.compose.material.icons.rounded.PowerOff
+import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material.icons.rounded.Transcribe
 import androidx.compose.material.icons.rounded.VolumeDown
 import androidx.compose.material.icons.rounded.VolumeOff
@@ -26,13 +37,18 @@ import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.tooling.preview.Devices
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.wear.compose.foundation.ExperimentalWearFoundationApi
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
@@ -48,19 +64,29 @@ import androidx.wear.compose.material.TimeText
 import androidx.wear.compose.material.Vignette
 import androidx.wear.compose.material.VignettePosition
 import androidx.wear.compose.material.scrollAway
+import androidx.wear.input.RemoteInputIntentHelper
+import androidx.wear.input.wearableExtender
+import androidx.wear.tooling.preview.devices.WearDevices
 import com.google.android.horologist.annotations.ExperimentalHorologistApi
 import com.google.android.horologist.compose.rotaryinput.rotaryWithScroll
 import com.google.gson.Gson
 import com.stevenandbonnie.cecvol.R
 import com.stevenandbonnie.cecvol.presentation.theme.CECVolTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.single
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import java.io.IOException
+
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,6 +104,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun WearApp() {
   CECVolTheme {
+    val context = LocalContext.current
     val listState = rememberScalingLazyListState()
     Scaffold(
       timeText = { TimeText(modifier = Modifier.scrollAway(listState)) },
@@ -94,9 +121,7 @@ fun WearApp() {
         modifier = Modifier.rotaryWithScroll(
           scrollableState = listState,
           focusRequester = focusRequester,
-        ),
-        verticalArrangement = Arrangement.Center,
-        state = listState
+        ), verticalArrangement = Arrangement.Center, state = listState
       ) {
         item {
           Text(
@@ -106,6 +131,9 @@ fun WearApp() {
             text = stringResource(R.string.app_name)
           )
         }
+
+        //        item { TextField(value = text, onValueChange = { text = it }, label = {
+        // Text("Label") }) }
         item {
           Row(modifier = contentModifier, horizontalArrangement = Arrangement.SpaceEvenly) {
             Button(
@@ -115,7 +143,7 @@ fun WearApp() {
                   Execution(
                     command = "action.devices.commands.OnOff",
                     params = mapOf("on" to false),
-                  )
+                  ), context
                 )
               },
             ) {
@@ -132,13 +160,51 @@ fun WearApp() {
                   Execution(
                     command = "action.devices.commands.OnOff",
                     params = mapOf("on" to true),
-                  )
+                  ), context
                 )
               },
             ) {
               Icon(
                 imageVector = Icons.Rounded.Power,
                 contentDescription = "turn on tv",
+                modifier = iconModifier
+              )
+            }
+          }
+        }
+        item {
+          Row(modifier = contentModifier, horizontalArrangement = Arrangement.SpaceEvenly) {
+            Button(
+              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
+              onClick = {
+                sendPostRequest(
+                  Execution(
+                    command = "action.devices.commands.mute",
+                    params = mapOf("mute" to true),
+                  ), context
+                )
+              },
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.VolumeOff,
+                contentDescription = "mute volume",
+                modifier = iconModifier
+              )
+            }
+            Button(
+              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
+              onClick = {
+                sendPostRequest(
+                  Execution(
+                    command = "action.devices.commands.volumeRelative",
+                    params = mapOf("relativeSteps" to -1),
+                  ), context
+                )
+              },
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.VolumeDown,
+                contentDescription = "turn volume down",
                 modifier = iconModifier
               )
             }
@@ -149,7 +215,7 @@ fun WearApp() {
                   Execution(
                     command = "action.devices.commands.volumeRelative",
                     params = mapOf("relativeSteps" to 1),
-                  )
+                  ), context
                 )
               },
             ) {
@@ -170,7 +236,7 @@ fun WearApp() {
                   Execution(
                     command = "action.devices.commands.SetInput",
                     params = mapOf("newInput" to "1"),
-                  )
+                  ), context
                 )
               },
             ) { Text("1") }
@@ -181,27 +247,10 @@ fun WearApp() {
                   Execution(
                     command = "action.devices.commands.SetInput",
                     params = mapOf("newInput" to "2"),
-                  )
+                  ), context
                 )
               },
             ) { Text("2") }
-            Button(
-              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
-              onClick = {
-                sendPostRequest(
-                  Execution(
-                    command = "action.devices.commands.volumeRelative",
-                    params = mapOf("relativeSteps" to -1),
-                  )
-                )
-              },
-            ) {
-              Icon(
-                imageVector = Icons.Rounded.VolumeDown,
-                contentDescription = "turn volume down",
-                modifier = iconModifier
-              )
-            }
           }
         }
         item {
@@ -213,7 +262,7 @@ fun WearApp() {
                   Execution(
                     command = "action.devices.commands.SetInput",
                     params = mapOf("newInput" to "3"),
-                  )
+                  ), context
                 )
               },
             ) { Text("3") }
@@ -224,27 +273,10 @@ fun WearApp() {
                   Execution(
                     command = "action.devices.commands.SetInput",
                     params = mapOf("newInput" to "4"),
-                  )
+                  ), context
                 )
               },
             ) { Text("4") }
-            Button(
-              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
-              onClick = {
-                sendPostRequest(
-                  Execution(
-                    command = "action.devices.commands.mute",
-                    params = mapOf("mute" to true),
-                  )
-                )
-              },
-            ) {
-              Icon(
-                imageVector = Icons.Rounded.VolumeOff,
-                contentDescription = "mute volume",
-                modifier = iconModifier
-              )
-            }
           }
         }
         item {
@@ -255,7 +287,7 @@ fun WearApp() {
                 Execution(
                   command = "action.devices.commands.wol",
                   params = null,
-                )
+                ), context
               )
             },
             label = {
@@ -270,21 +302,94 @@ fun WearApp() {
             },
           )
         }
+        item {
+          val websiteLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.StartActivityForResult()
+          ) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+              CoroutineScope(Dispatchers.IO).launch {
+                val name = RemoteInput.getResultsFromIntent(result.data).getString(WEBSITE_URL)
+                name?.let { context.dataStore.edit { s -> s[WEBSITE_URL_PREF] = name } }
+              }
+            }
+          }
+          val userPassLauncher = rememberLauncherForActivityResult(
+            contract = ActivityResultContracts.StartActivityForResult()
+          ) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+              CoroutineScope(Dispatchers.IO).launch {
+                val name = RemoteInput.getResultsFromIntent(result.data).getString(WEBSITE_USERNAME)
+                name?.let { context.dataStore.edit { s -> s[WEBSITE_USERNAME_PREF] = name } }
+                val pass = RemoteInput.getResultsFromIntent(result.data).getString(WEBSITE_PASSWORD)
+                pass?.let { context.dataStore.edit { s -> s[WEBSITE_PASSWORD_PREF] = pass } }
+              }
+            }
+          }
+          Row(modifier = contentModifier, horizontalArrangement = Arrangement.SpaceEvenly) {
+            Button(
+              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
+              onClick = {
+                val intent: Intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
+                val remoteInputs: List<RemoteInput> = listOf(
+                  RemoteInput.Builder(WEBSITE_URL).setLabel("Website URL").wearableExtender {
+                      setEmojisAllowed(false)
+                      setInputActionType(EditorInfo.IME_ACTION_DONE)
+                    }.build(),
+                )
+                RemoteInputIntentHelper.putRemoteInputsExtra(intent, remoteInputs)
+                websiteLauncher.launch(intent)
+              },
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.Public,
+                contentDescription = "website",
+                modifier = iconModifier
+              )
+            }
+            Button(
+              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
+              onClick = {
+                val intent: Intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
+                val remoteInputs: List<RemoteInput> =
+                  listOf(RemoteInput.Builder(WEBSITE_USERNAME).setLabel("Username")
+                    .wearableExtender {
+                      setEmojisAllowed(false)
+                      setInputActionType(EditorInfo.IME_ACTION_DONE)
+                    }.build(),
+                    RemoteInput.Builder(WEBSITE_PASSWORD).setLabel("Password").wearableExtender {
+                        setEmojisAllowed(false)
+                        setInputActionType(EditorInfo.IME_ACTION_DONE)
+                      }.build())
+                RemoteInputIntentHelper.putRemoteInputsExtra(intent, remoteInputs)
+                userPassLauncher.launch(intent)
+              },
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.Key,
+                contentDescription = "login info",
+                modifier = iconModifier
+              )
+            }
+          }
+        }
       }
     }
   }
 }
 
-fun sendPostRequest(cmd: Execution) {
-  val mURL = URL("https://cec.stevenandbonnie.com/fulfillment")
+fun sendPostRequest(cmd: Execution, context: Context) {
+  Log.d("a", "b")
+
   CoroutineScope(Dispatchers.IO).launch {
+    val settings = context.dataStore.data.first()
+    val mURL = URL("https://" + settings[WEBSITE_URL_PREF] + "/fulfillment")
+    Log.d("a", mURL.toString())
+    val auth = settings[WEBSITE_USERNAME_PREF] + ":" + settings[WEBSITE_PASSWORD_PREF]
     with(mURL.openConnection() as HttpURLConnection) {
-      // optional default is GET
       requestMethod = "POST"
       setRequestProperty("Content-Type", "application/json")
       setRequestProperty(
-        "Authorization",
-        "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJjZWMuc3RldmVuYW5kYm9ubmllLmNvbSIsImV4cCI6NDc3ODQ1MjQ3MCwibmJmIjoxNjI0ODUyNDcwLCJpYXQiOjE2MjQ4NTI0NzB9.8DKqpmMDUMlkVMTPMgSgfXACDX1gQBs83K36vwHvzOg"
+        "Authorization", "Basic " + Base64.encodeToString(auth.toByteArray(), Base64.DEFAULT)
       )
       val req = FulfillmentRequest(
         requestId = "no-id",
@@ -310,29 +415,43 @@ fun sendPostRequest(cmd: Execution) {
       Log.d("post", "content : $json")
       Log.d("post", "Response Code : $responseCode")
 
-      BufferedReader(InputStreamReader(inputStream)).use {
-        val response = StringBuffer()
+      if (responseCode == 200) {
+        BufferedReader(InputStreamReader(inputStream)).use {
+          val response = StringBuffer()
 
-        var inputLine = it.readLine()
-        while (inputLine != null) {
-          response.append(inputLine)
-          inputLine = it.readLine()
+          var inputLine = it.readLine()
+          while (inputLine != null) {
+            response.append(inputLine)
+            inputLine = it.readLine()
+          }
+          Log.d("post", "Response : $response")
         }
-        Log.d("post", "Response : $response")
       }
     }
   }
 }
 
 data class FulfillmentRequest(val requestId: String, val inputs: List<RequestPayload>)
+
 data class RequestPayload(val intent: String, val payload: ExecutePayload)
+
 data class ExecutePayload(val commands: List<ExecuteCommand>)
+
 data class ExecuteCommand(val devices: List<DeviceId>, val execution: List<Execution>)
+
 data class DeviceId(val id: String)
+
 data class Execution(val command: String, val params: Map<String, Any>?)
 
-@Preview(device = Devices.WEAR_OS_SMALL_ROUND, showSystemUi = true)
+@Preview(device = WearDevices.SMALL_ROUND, showSystemUi = true)
 @Composable
 fun DefaultPreview() {
   WearApp()
 }
+
+private const val WEBSITE_URL = "website_url"
+private val WEBSITE_URL_PREF = stringPreferencesKey(WEBSITE_URL)
+private const val WEBSITE_USERNAME = "website_username"
+private val WEBSITE_USERNAME_PREF = stringPreferencesKey(WEBSITE_USERNAME)
+private const val WEBSITE_PASSWORD = "website_password"
+private val WEBSITE_PASSWORD_PREF = stringPreferencesKey(WEBSITE_PASSWORD)
