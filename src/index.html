@@ -12,10 +12,18 @@
                 <path d='m130 115v-35h105 105v35 35h-105-105v-35z' />
             </g>
         </svg>" type="image/svg+xml" />
-    <title>cecvol</title>
+    <title>CECvol</title>
+    <link rel="stylesheet" href="https://unpkg.com/material-components-web@latest/dist/material-components-web.min.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
     <style>
-        button {
-            padding: 20px;
+        h1,
+        p {
+            text-align: center;
+        }
+
+        #status {
+            padding: 10px;
+            visibility: hidden;
         }
     </style>
     <script>
@@ -42,7 +50,15 @@
                 })
             })
                 .then(response => response.json())
-                .then(data => console.log(data));
+                .then(data => {
+                    console.log(data);
+                    document.getElementById("status").style.visibility = "hidden";
+                })
+                .catch(e => {
+                    console.log(e);
+                    document.getElementById("status").textContent = e;
+                    document.getElementById("status").style.visibility = "visible";
+                });
         }
         function sendVol(level) {
             executeCommand({
@@ -96,26 +112,56 @@
 <body>
     <h1>TV Control</h1>
     <p>
-        <button onclick="sendVol(-1)">-1</button>
-        <button onclick="sendVol(1)">+1</button>
+        <button class="mdc-button mdc-button--raised" onclick="onOff(false)">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">power_off</i>
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="onOff(true)">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">power</i>
+        </button>
     </p>
     <p>
-        <button onclick="mute(true)">mute</button>
-        <button onclick="mute(false)">unmute</button>
+        <button class="mdc-button mdc-button--raised" onclick="mute(true)">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">volume_off</i>
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="sendVol(-1)">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">volume_down</i>
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="sendVol(1)">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">volume_up</i>
+        </button>
     </p>
     <p>
-        <button onclick="onOff(false)">off</button>
-        <button onclick="onOff(true)">on</button>
+        <button class="mdc-button mdc-button--raised" onclick="setInput('1')">
+            <span class="mdc-button__ripple"></span>
+            hdmi1
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="setInput('2')">
+            <span class="mdc-button__ripple"></span>
+            hdmi2
+        </button>
     </p>
     <p>
-        <button onclick="setInput('1')">hdmi1</button>
-        <button onclick="setInput('2')">hdmi2</button>
-        <button onclick="setInput('3')">hdmi3</button>
-        <button onclick="setInput('4')">hdmi4</button>
+        <button class="mdc-button mdc-button--raised" onclick="setInput('3')">
+            <span class="mdc-button__ripple"></span>
+            hdmi3
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="setInput('4')">
+            <span class="mdc-button__ripple"></span>
+            hdmi4
+        </button>
     </p>
     <p>
-        <button onclick="wol()">wol</button>
+        <button class="mdc-button mdc-button--raised" onclick="wol()">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">transcribe</i>&nbsp;Wake Serpens
+        </button>
     </p>
+    <p><span id="status" class="mdc-elevation--z2">abc</span></p>
 </body>
 
 </html>
