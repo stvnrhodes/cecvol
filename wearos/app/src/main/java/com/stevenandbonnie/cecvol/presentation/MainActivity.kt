@@ -168,44 +168,6 @@ fun WearApp() {
                 modifier = iconModifier
               )
             }
-          }
-        }
-        item {
-          Row(modifier = contentModifier, horizontalArrangement = Arrangement.SpaceEvenly) {
-            Button(
-              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
-              onClick = {
-                sendPostRequest(
-                  Execution(
-                    command = "action.devices.commands.mute",
-                    params = mapOf("mute" to true),
-                  ), context
-                )
-              },
-            ) {
-              Icon(
-                imageVector = Icons.Rounded.VolumeOff,
-                contentDescription = "mute volume",
-                modifier = iconModifier
-              )
-            }
-            Button(
-              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
-              onClick = {
-                sendPostRequest(
-                  Execution(
-                    command = "action.devices.commands.volumeRelative",
-                    params = mapOf("relativeSteps" to -1),
-                  ), context
-                )
-              },
-            ) {
-              Icon(
-                imageVector = Icons.Rounded.VolumeDown,
-                contentDescription = "turn volume down",
-                modifier = iconModifier
-              )
-            }
             Button(
               modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
               onClick = {
@@ -249,6 +211,23 @@ fun WearApp() {
                 )
               },
             ) { Text("2") }
+            Button(
+              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
+              onClick = {
+                sendPostRequest(
+                  Execution(
+                    command = "action.devices.commands.volumeRelative",
+                    params = mapOf("relativeSteps" to -1),
+                  ), context
+                )
+              },
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.VolumeDown,
+                contentDescription = "turn volume down",
+                modifier = iconModifier
+              )
+            }
           }
         }
         item {
@@ -275,6 +254,23 @@ fun WearApp() {
                 )
               },
             ) { Text("4") }
+            Button(
+              modifier = Modifier.size(ButtonDefaults.SmallButtonSize),
+              onClick = {
+                sendPostRequest(
+                  Execution(
+                    command = "action.devices.commands.mute",
+                    params = mapOf("mute" to true),
+                  ), context
+                )
+              },
+            ) {
+              Icon(
+                imageVector = Icons.Rounded.VolumeOff,
+                contentDescription = "mute volume",
+                modifier = iconModifier
+              )
+            }
           }
         }
         item {
