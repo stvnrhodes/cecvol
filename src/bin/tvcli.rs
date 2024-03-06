@@ -25,7 +25,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tv = lgip::LGTV::new("LGWebOSTV.local".to_string(), mac_addr, &args.keycode);
     let mut cmd = args.commands.join(" ");
     cmd.push_str("\r");
-    println!("{}", cmd);
     println!("{}", tv.send_command(&cmd)?);
     Ok(())
 }
