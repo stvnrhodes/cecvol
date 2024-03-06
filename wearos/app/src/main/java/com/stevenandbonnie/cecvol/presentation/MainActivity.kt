@@ -132,8 +132,6 @@ fun WearApp() {
           )
         }
 
-        //        item { TextField(value = text, onValueChange = { text = it }, label = {
-        // Text("Label") }) }
         item {
           Row(modifier = contentModifier, horizontalArrangement = Arrangement.SpaceEvenly) {
             Button(
@@ -378,12 +376,9 @@ fun WearApp() {
 }
 
 fun sendPostRequest(cmd: Execution, context: Context) {
-  Log.d("a", "b")
-
   CoroutineScope(Dispatchers.IO).launch {
     val settings = context.dataStore.data.first()
     val mURL = URL("https://" + settings[WEBSITE_URL_PREF] + "/fulfillment")
-    Log.d("a", mURL.toString())
     val auth = settings[WEBSITE_USERNAME_PREF] + ":" + settings[WEBSITE_PASSWORD_PREF]
     with(mURL.openConnection() as HttpURLConnection) {
       requestMethod = "POST"

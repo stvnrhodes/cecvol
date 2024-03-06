@@ -10,12 +10,6 @@ The LG IP code works by opening a TCP connection and sending symmetrically-encry
 
 The CEC code works by calling ioctls on `/dev/vchiq` so it only works on a raspberry pi.
 
-Use the following command to build a debian package that works on Raspbian.
-
-```shell
-CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=/usr/bin/arm-linux-gnueabihf-gcc cargo deb --target=armv7-unknown-linux-gnueabihf
-```
-
 There's no authentication within the server code. It expects to be run behind a proxy that terminates TLS and provides HTTP basic authentication.
 
 The API is designed around being used as a Google Smart Home Action, but that feature isn't currently functional.
