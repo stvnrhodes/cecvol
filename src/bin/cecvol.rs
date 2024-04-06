@@ -1,4 +1,5 @@
 use cecvol::action;
+use cecvol::auth;
 use cecvol::cec;
 use cecvol::lgip;
 use cecvol::tv;
@@ -14,6 +15,8 @@ use rouille::router;
 use rouille::Request;
 use rouille::Response;
 use serde_json::json;
+use std::collections::HashSet;
+use std::fs;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -212,6 +215,22 @@ struct Args {
     /// Server MAC address for WoL, in xx:xx:xx:xx:xx:xx form.
     #[arg(long, env = "SERVER_MAC_ADDR")]
     server_mac_addr: String,
+
+    /// File with newline-separated tokens acceptable for Authorization header
+    #[arg(long, env = "AUTH_TOKEN_FILE")]
+    auth_token_file: Option<String>,
+
+    /// Permitted emails for login
+    #[arg(long, env = "ALLOWED_EMAILS")]
+    allowed_emails: Vec<String>,
+
+    /// Client id for OIDC login
+    #[arg(long, env = "OIDC_CLIENT_ID")]
+    oidc_client_id: Option<String>,
+
+    /// Client secret for OIDC login
+    #[arg(long, env = "OIDC_CLIENT_SECRET")]
+    oidc_client_secret: Option<String>,
 }
 
 #[derive(Clone)]
@@ -267,6 +286,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, s) in args.server_mac_addr.split(":").enumerate() {
         server_mac_addr[i] = u8::from_str_radix(s, 16)?;
     }
+
+    let mut auth_tokens = HashSet::new();
+    if let Some(filepath) = args.auth_token_file {
+        let contents = fs::read_to_string(filepath)?;
+        for line in contents.lines() {
+            if line.trim() != "" && !line.starts_with("#") {
+                auth_tokens.insert(line.trim().to_string());
+            }
+        }
+    }
+    let mut allowed_emails = HashSet::new();
+    for e in args.allowed_emails {
+        allowed_emails.insert(e);
+    }
+
+    let authorizer = match (args.oidc_client_id, args.oidc_client_secret) {
+        (Some(oidc_client_id), Some(oidc_client_secret)) => {
+            info!("enforcing login");
+            Some(auth::Authorizer::new(
+                auth_tokens,
+                allowed_emails,
+                oidc_client_id,
+                oidc_client_secret,
+            ))
+        }
+        _ => {
+            info!("not enforcing login");
+            None
+        }
+    };
+
     let app_state = AppState {
         cec: conn,
         server_mac_addr,
@@ -275,12 +325,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting server...");
 
     rouille::start_server(&args.http_addr, move |request| {
-        let resp = router!(request,
-            (GET) (/) => {index()},
-            (GET) (/varz) => {varz()},
-            (POST) (/fulfillment) => {fulfillment(app_state.clone(), request)},
-            _ => rouille::Response::empty_404()
-        );
+        let route = |req: &Request| {
+            router!(req,
+                (GET) (/) => {index()},
+                (GET) (/varz) => {varz()},
+                (POST) (/fulfillment) => {fulfillment(app_state.clone(), req)},
+                _ => rouille::Response::empty_404()
+            )
+        };
+        let resp = match &authorizer {
+            Some(a) => a.ensure_authorized(request, route),
+            None => route(request),
+        };
         info!(
             "{request} {status}",
             request = request.url(),
