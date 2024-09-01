@@ -23,16 +23,18 @@ fn index() -> Response {
     Response::html(include_str!("../index.html"))
 }
 
-fn fulfillment(app_state: AppState, request: &Request) -> Result<Response, Response> {
+fn fulfillment(app_state: AppState, request: &Request) -> Response {
     let cec = &app_state.cec;
-    let data = request.data().unwrap();
-    let req: FulfillmentRequest = serde_json::from_reader(data).unwrap();
+    let req: FulfillmentRequest = match rouille::input::json_input(request) {
+        Ok(r) => r,
+        Err(e) => return Response::text(e.to_string()).with_status_code(400),
+    };
 
     let request_id = req.request_id.clone();
     for input in &req.inputs {
         match input {
             RequestPayload::Sync => {
-                return Ok(Response::json(&FulfillmentResponse {
+                return Response::json(&FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
                         // TODO(stvn): Switch to oauth identity
@@ -79,17 +81,17 @@ fn fulfillment(app_state: AppState, request: &Request) -> Result<Response, Respo
                             }
                         ]
                     }),
-                }));
+                });
             }
             RequestPayload::Query { devices: _ } => {
                 // let mut device_data = HashMap::new();
-                return Ok(Response::json(&FulfillmentResponse {
+                return Response::json(&FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
                         // TODO
                         // "devices": device_data,
                     }),
-                }));
+                });
             }
             RequestPayload::Execute { commands } => {
                 let mut cec = cec.lock().unwrap();
@@ -97,18 +99,24 @@ fn fulfillment(app_state: AppState, request: &Request) -> Result<Response, Respo
                     for e in &c.execution {
                         match e {
                             Execution::VolumeRelative { relative_steps } => {
-                                cec.volume_change(*relative_steps)?;
+                                if let Err(e) = cec.volume_change(*relative_steps) {
+                                    return e.into();
+                                }
                             }
                             Execution::Mute { mute } => {
-                                cec.mute(*mute)?;
+                                if let Err(e) = cec.mute(*mute) {
+                                    return e.into();
+                                }
                             }
                             Execution::OnOff { on } => {
-                                cec.on_off(*on)?;
+                                if let Err(e) = cec.on_off(*on) {
+                                    return e.into();
+                                }
                             }
                             Execution::WakeOnLan => {
-                                wol::wake(app_state.server_mac_addr).map_err(|_| {
-                                    Response::text("wol fail").with_status_code(500)
-                                })?;
+                                if let Err(e) = wol::wake(app_state.server_mac_addr) {
+                                    return Response::text(e.to_string()).with_status_code(500);
+                                }
                             }
                             Execution::SetInput { new_input } => {
                                 let input = match new_input.as_str() {
@@ -117,29 +125,31 @@ fn fulfillment(app_state: AppState, request: &Request) -> Result<Response, Respo
                                     "3" | "HDMI 3" => tv::Input::HDMI3,
                                     "4" | "HDMI 4" => tv::Input::HDMI4,
                                     _ => {
-                                        return Ok(Response::json(&FulfillmentResponse {
+                                        return Response::json(&FulfillmentResponse {
                                             request_id: request_id,
                                             payload: json!({
                                                 "errorCode": ErrorCodes::NotSupported,
                                                 "debugString": "unsupported input",
                                             }),
-                                        }))
+                                        })
                                     }
                                 };
-                                cec.set_input(input)?;
+                                if let Err(e) = cec.set_input(input) {
+                                    return e.into();
+                                }
                             }
                             _ => {
-                                return Ok(Response::json(&FulfillmentResponse {
+                                return Response::json(&FulfillmentResponse {
                                     request_id: request_id,
                                     payload: json!({
                                         "errorCode": ErrorCodes::NotSupported,
                                         "debugString": "unknown command",
                                     }),
-                                }))
+                                })
                             }
                         }
                         // TODO(stvn): Do all executions in the array, improve error handling
-                        return Ok(Response::json(&FulfillmentResponse {
+                        return Response::json(&FulfillmentResponse {
                             request_id: request_id,
                             payload: json!({
                                 "commands": [
@@ -150,7 +160,7 @@ fn fulfillment(app_state: AppState, request: &Request) -> Result<Response, Respo
                                     }
                                 ],
                             }),
-                        }));
+                        });
                     }
                 }
             }
@@ -158,13 +168,13 @@ fn fulfillment(app_state: AppState, request: &Request) -> Result<Response, Respo
         }
     }
 
-    Ok(Response::json(&FulfillmentResponse {
+    Response::json(&FulfillmentResponse {
         request_id: request_id,
         payload: json!({
             "errorCode": ErrorCodes::NotSupported,
             "debugString": "no inputs provided",
         }),
-    }))
+    })
 }
 
 fn varz() -> Response {
@@ -268,11 +278,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let resp = router!(request,
             (GET) (/) => {index()},
             (GET) (/varz) => {varz()},
-            (POST) (/fulfillment) => {
-                match fulfillment(app_state.clone(), request){
-                    Ok(r)=>r,
-                    Err(r)=>r,
-                }},
+            (POST) (/fulfillment) => {fulfillment(app_state.clone(), request)},
             _ => rouille::Response::empty_404()
         );
         info!(
