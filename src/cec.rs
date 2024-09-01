@@ -4,11 +4,9 @@ pub mod vchiq_ioctl;
 
 use crate::tv;
 use crate::tv::TVError;
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
-use axum::response::Response;
 use log::info;
 use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
+use rouille::Response;
 use std::array::TryFromSliceError;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
@@ -273,9 +271,9 @@ impl From<Error> for CECError {
     }
 }
 
-impl IntoResponse for CECError {
-    fn into_response(self) -> Response {
-        StatusCode::IM_A_TEAPOT.into_response()
+impl From<CECError> for Response {
+    fn from(e: CECError) -> Response {
+        Response::text(e.to_string()).with_status_code(500)
     }
 }
 

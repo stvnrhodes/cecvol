@@ -7,37 +7,32 @@ use cecvol::wol;
 use action::devices::{
     ErrorCodes, Execution, FulfillmentRequest, FulfillmentResponse, RequestPayload,
 };
-use axum::extract;
-use axum::http::Request;
-use axum::http::StatusCode;
-use axum::middleware;
-use axum::response;
-use axum::response::IntoResponse;
-use axum::response::Response;
-use axum::routing;
-use axum::Router;
+
 use clap::Parser;
 use log::info;
+use rouille::router;
+use rouille::Request;
+use rouille::Response;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::Mutex;
 
 const DEVICE_ID: &str = "1";
 
-async fn index() -> impl IntoResponse {
-    response::Html(include_str!("../index.html"))
+fn index() -> Response {
+    Response::html(include_str!("../index.html"))
 }
 
-async fn fulfillment(
-    app_state: extract::State<AppState>,
-    req: extract::Json<FulfillmentRequest>,
-) -> response::Result<response::Json<FulfillmentResponse>> {
+fn fulfillment(app_state: AppState, request: &Request) -> Result<Response, Response> {
     let cec = &app_state.cec;
+    let data = request.data().unwrap();
+    let req: FulfillmentRequest = serde_json::from_reader(data).unwrap();
+
     let request_id = req.request_id.clone();
     for input in &req.inputs {
         match input {
             RequestPayload::Sync => {
-                return Ok(response::Json(FulfillmentResponse {
+                return Ok(Response::json(&FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
                         // TODO(stvn): Switch to oauth identity
@@ -88,7 +83,7 @@ async fn fulfillment(
             }
             RequestPayload::Query { devices: _ } => {
                 // let mut device_data = HashMap::new();
-                return Ok(response::Json(FulfillmentResponse {
+                return Ok(Response::json(&FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
                         // TODO
@@ -111,8 +106,9 @@ async fn fulfillment(
                                 cec.on_off(*on)?;
                             }
                             Execution::WakeOnLan => {
-                                wol::wake(app_state.server_mac_addr)
-                                    .map_err(|_| StatusCode::IM_A_TEAPOT)?;
+                                wol::wake(app_state.server_mac_addr).map_err(|_| {
+                                    Response::text("wol fail").with_status_code(500)
+                                })?;
                             }
                             Execution::SetInput { new_input } => {
                                 let input = match new_input.as_str() {
@@ -121,7 +117,7 @@ async fn fulfillment(
                                     "3" | "HDMI 3" => tv::Input::HDMI3,
                                     "4" | "HDMI 4" => tv::Input::HDMI4,
                                     _ => {
-                                        return Ok(response::Json(FulfillmentResponse {
+                                        return Ok(Response::json(&FulfillmentResponse {
                                             request_id: request_id,
                                             payload: json!({
                                                 "errorCode": ErrorCodes::NotSupported,
@@ -133,7 +129,7 @@ async fn fulfillment(
                                 cec.set_input(input)?;
                             }
                             _ => {
-                                return Ok(response::Json(FulfillmentResponse {
+                                return Ok(Response::json(&FulfillmentResponse {
                                     request_id: request_id,
                                     payload: json!({
                                         "errorCode": ErrorCodes::NotSupported,
@@ -143,7 +139,7 @@ async fn fulfillment(
                             }
                         }
                         // TODO(stvn): Do all executions in the array, improve error handling
-                        return Ok(response::Json(FulfillmentResponse {
+                        return Ok(Response::json(&FulfillmentResponse {
                             request_id: request_id,
                             payload: json!({
                                 "commands": [
@@ -162,7 +158,7 @@ async fn fulfillment(
         }
     }
 
-    Ok(response::Json(FulfillmentResponse {
+    Ok(Response::json(&FulfillmentResponse {
         request_id: request_id,
         payload: json!({
             "errorCode": ErrorCodes::NotSupported,
@@ -171,27 +167,13 @@ async fn fulfillment(
     }))
 }
 
-async fn varz() -> response::Result<impl IntoResponse> {
+fn varz() -> Response {
     let metrics = prometheus::gather();
     let encoder = prometheus::TextEncoder::new();
-    encoder
-        .encode_to_string(&metrics)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)).into())
-}
-
-async fn add_observability<B>(
-    req: Request<B>,
-    next: middleware::Next<B>,
-) -> response::Result<Response> {
-    let path = format!("{:?}", req.uri().path_and_query().unwrap());
-    let resp = next.run(req).await;
-    // /fulfillment 200 {"content-type": "application/json", "content-length": "170"}
-    info!(
-        "{request} {status}",
-        request = path,
-        status = resp.status().as_str(),
-    );
-    Ok(resp)
+    match encoder.encode_to_string(&metrics) {
+        Ok(encoded) => Response::text(encoded),
+        Err(err) => Response::text(err.to_string()).with_status_code(500),
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -228,8 +210,7 @@ struct AppState {
     cec: Arc<Mutex<Box<dyn tv::TVConnection + Sync + Send>>>,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("INFO"))
@@ -281,16 +262,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_mac_addr,
     };
 
-    let app = Router::new()
-        .route("/", routing::get(index))
-        .route("/varz", routing::get(varz))
-        .route("/fulfillment", routing::post(fulfillment))
-        .route_layer(middleware::from_fn(add_observability))
-        .with_state(app_state);
-
     info!("Starting server...");
-    axum::Server::bind(&args.http_addr.parse().unwrap())
-        .serve(app.into_make_service())
-        .await?;
-    Ok(())
+
+    rouille::start_server(&args.http_addr, move |request| {
+        let resp = router!(request,
+            (GET) (/) => {index()},
+            (GET) (/varz) => {varz()},
+            (POST) (/fulfillment) => {
+                match fulfillment(app_state.clone(), request){
+                    Ok(r)=>r,
+                    Err(r)=>r,
+                }},
+            _ => rouille::Response::empty_404()
+        );
+        info!(
+            "{request} {status}",
+            request = request.url(),
+            status = resp.status_code,
+        );
+        resp
+    });
 }
