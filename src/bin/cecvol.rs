@@ -16,7 +16,6 @@ use rouille::Request;
 use rouille::Response;
 use serde_json::json;
 use std::collections::HashSet;
-use std::fs;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -216,9 +215,9 @@ struct Args {
     #[arg(long, env = "SERVER_MAC_ADDR")]
     server_mac_addr: String,
 
-    /// File with newline-separated tokens acceptable for Authorization header
-    #[arg(long, env = "AUTH_TOKEN_FILE")]
-    auth_token_file: Option<String>,
+    /// Newline-separated tokens acceptable for Authorization header
+    #[arg(long, env = "AUTH_TOKENS")]
+    auth_tokens: Option<String>,
 
     /// Permitted emails for login
     #[arg(long, env = "ALLOWED_EMAILS")]
@@ -288,9 +287,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut auth_tokens = HashSet::new();
-    if let Some(filepath) = args.auth_token_file {
-        let contents = fs::read_to_string(filepath)?;
-        for line in contents.lines() {
+    if let Some(tokens) = args.auth_tokens {
+        for line in tokens.lines() {
             if line.trim() != "" && !line.starts_with("#") {
                 auth_tokens.insert(line.trim().to_string());
             }
