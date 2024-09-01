@@ -87,11 +87,13 @@ struct Claims {
 
 fn self_uri(req: &Request) -> String {
     if let Some(host) = req.header("Host") {
-        let prefix = if req.is_secure() {
-            "https://"
-        } else {
-            "http://"
-        };
+        let prefix =
+            if !req.is_secure() && !host.starts_with("localhost") && !host.starts_with("127.0.0.1")
+            {
+                "http://"
+            } else {
+                "https://"
+            };
         format!("{prefix}{host}")
     } else {
         "".into()
