@@ -87,13 +87,13 @@ struct Claims {
 
 fn self_uri(req: &Request) -> String {
     if let Some(host) = req.header("Host") {
-        let prefix =
-            if !req.is_secure() && !host.starts_with("localhost") && !host.starts_with("127.0.0.1")
-            {
-                "http://"
-            } else {
-                "https://"
-            };
+        let prefix = if !req.is_secure()
+            && (host.starts_with("localhost") || host.starts_with("127.0.0.1"))
+        {
+            "http://"
+        } else {
+            "https://"
+        };
         format!("{prefix}{host}")
     } else {
         "".into()
@@ -150,9 +150,11 @@ impl Authorizer {
             Some(s) => s,
             None => return Response::text("missing state").with_status_code(400),
         };
-        let nonces = self.nonces.lock().unwrap();
-        if !nonces.contains(&state) {
-            return Response::text("unknown state").with_status_code(400);
+        {
+            let nonces = self.nonces.lock().unwrap();
+            if !nonces.contains(&state) {
+                return Response::text("unknown state").with_status_code(400);
+            }
         }
         let code = match req.get_param("code") {
             Some(c) => c,
@@ -184,12 +186,14 @@ impl Authorizer {
         let claims: Claims = serde_json::from_slice(&jsonclaims).unwrap();
 
         // Check nonces
-        let nonce = claims.nonce.unwrap_or_default();
-        let mut nonces = self.nonces.lock().unwrap();
-        if !nonces.contains(&nonce) {
-            return Response::text("reused nonce").with_status_code(400);
+        {
+            let nonce = claims.nonce.unwrap_or_default();
+            let mut nonces = self.nonces.lock().unwrap();
+            if !nonces.contains(&nonce) {
+                return Response::text("reused nonce").with_status_code(400);
+            }
+            nonces.remove(&nonce);
         }
-        nonces.remove(&nonce);
 
         let email = claims.email.unwrap_or_default();
 

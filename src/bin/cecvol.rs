@@ -323,6 +323,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Starting server...");
 
     rouille::start_server(&args.http_addr, move |request| {
+        info!(
+            "{method} {url}",
+            method = request.method(),
+            url = request.raw_url(),
+        );
         let route = |req: &Request| {
             router!(req,
                 (GET) (/) => {index()},
@@ -335,11 +340,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(a) => a.ensure_authorized(request, route),
             None => route(request),
         };
-        info!(
-            "{request} {status}",
-            request = request.url(),
-            status = resp.status_code,
-        );
+        info!("... {status}", status = resp.status_code,);
         resp
     });
 }
