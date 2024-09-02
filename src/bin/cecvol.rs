@@ -14,6 +14,7 @@ use log::info;
 use rouille::router;
 use rouille::Request;
 use rouille::Response;
+use rouille::ResponseBody;
 use serde_json::json;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -23,6 +24,17 @@ const DEVICE_ID: &str = "1";
 
 fn index() -> Response {
     Response::html(include_str!("../index.html"))
+}
+fn manifest() -> Response {
+    Response {
+        status_code: 200,
+        headers: vec![(
+            "Content-Type".into(),
+            "application/json; charset=utf-8".into(),
+        )],
+        data: ResponseBody::from_data(include_str!("../manifest.json")),
+        upgrade: None,
+    }
 }
 
 fn fulfillment(app_state: AppState, request: &Request) -> Response {
@@ -330,9 +342,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         let route = |req: &Request| {
             router!(req,
-                (GET) (/) => {index()},
-                (GET) (/varz) => {varz()},
-                (POST) (/fulfillment) => {fulfillment(app_state.clone(), req)},
+                (GET) ["/"] => {index()},
+                (GET) ["/manifest.json"] => {manifest()},
+                (GET) ["/varz"] => {varz()},
+                (POST) ["/fulfillment"] => {fulfillment(app_state.clone(), req)},
                 _ => rouille::Response::empty_404()
             )
         };
