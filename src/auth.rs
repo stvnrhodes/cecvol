@@ -226,6 +226,10 @@ impl Authorizer {
             // No need to do any more auth, call our normal function.
             return next(req);
         }
+        // Manifest gets a special carve-out to make sure it's installable.
+        if req.url() == "/manifest.json" {
+            return next(req);
+        }
 
         let redirect_uri = self_uri(&req) + "/code";
         // Construct a message for OIDC.
