@@ -19,7 +19,7 @@ env_logger = "0.10.0"
 lazy_static = "1.4.0"
 libc = "0.2.135"
 log = "0.4.17"
-nix = "0.26.2"
+nix = { version = "0.26.2", features = ["net"] }
 num_enum = "0.5.7"
 pbkdf2 = { version = "0.12.1", features = ["hmac"] }
 percent-encoding = "2.2.0"
