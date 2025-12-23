@@ -6,7 +6,6 @@ use crate::tv;
 use crate::tv::TVError;
 use log::info;
 use num_enum::{TryFromPrimitive, TryFromPrimitiveError};
-use rouille::Response;
 use std::array::TryFromSliceError;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
@@ -271,11 +270,7 @@ impl From<Error> for CECError {
     }
 }
 
-impl From<CECError> for Response {
-    fn from(e: CECError) -> Response {
-        Response::text(e.to_string()).with_status_code(500)
-    }
-}
+
 
 impl From<CECError> for TVError {
     fn from(err: CECError) -> Self {
