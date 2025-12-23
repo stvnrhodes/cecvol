@@ -342,7 +342,7 @@ pub struct DeviceId {
     pub id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(tag = "command", content = "params", rename_all = "camelCase")]
 pub enum Execution {
     // Mutes (sets the volume to 0) or unmutes the device.
