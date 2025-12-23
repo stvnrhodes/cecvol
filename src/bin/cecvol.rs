@@ -1,5 +1,4 @@
 use cecvol::action;
-use cecvol::auth;
 use cecvol::cec;
 use cecvol::lgip;
 use cecvol::tv;
@@ -11,44 +10,50 @@ use action::devices::{
 
 use clap::Parser;
 use log::info;
-use rouille::router;
-use rouille::Request;
-use rouille::Response;
-use rouille::ResponseBody;
+use serde::Serialize;
 use serde_json::json;
-use std::collections::HashSet;
+use std::io::Cursor;
+
 use std::sync::Arc;
 use std::sync::Mutex;
+use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 const DEVICE_ID: &str = "1";
 
-fn index() -> Response {
-    Response::html(include_str!("../index.html"))
-}
-fn manifest() -> Response {
-    Response {
-        status_code: 200,
-        headers: vec![(
-            "Content-Type".into(),
-            "application/json; charset=utf-8".into(),
-        )],
-        data: ResponseBody::from_data(include_str!("../manifest.json")),
-        upgrade: None,
-    }
+fn index() -> Response<Cursor<Vec<u8>>> {
+    Response::from_string(include_str!("../index.html"))
+        .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
 }
 
-fn fulfillment(app_state: AppState, request: &Request) -> Response {
+fn manifest() -> Response<Cursor<Vec<u8>>> {
+    Response::from_data(include_str!("../manifest.json").as_bytes().to_vec())
+        .with_header(Header::from_bytes("Content-Type", "application/json; charset=utf-8").unwrap())
+}
+
+fn json_response<T: Serialize>(data: &T) -> Response<Cursor<Vec<u8>>> {
+    let s = serde_json::to_string(data).unwrap();
+    Response::from_string(s)
+        .with_header(Header::from_bytes("Content-Type", "application/json").unwrap())
+}
+
+fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Vec<u8>>> {
     let cec = &app_state.cec;
-    let req: FulfillmentRequest = match rouille::input::json_input(request) {
+
+    let mut content = String::new();
+    if let Err(e) = request.as_reader().read_to_string(&mut content) {
+        return Response::from_string(e.to_string()).with_status_code(StatusCode(400));
+    }
+
+    let req: FulfillmentRequest = match serde_json::from_str(&content) {
         Ok(r) => r,
-        Err(e) => return Response::text(e.to_string()).with_status_code(400),
+        Err(e) => return Response::from_string(e.to_string()).with_status_code(StatusCode(400)),
     };
 
     let request_id = req.request_id.clone();
     for input in &req.inputs {
         match input {
             RequestPayload::Sync => {
-                return Response::json(&FulfillmentResponse {
+                return json_response(&FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
                         // TODO(stvn): Switch to oauth identity
@@ -99,7 +104,7 @@ fn fulfillment(app_state: AppState, request: &Request) -> Response {
             }
             RequestPayload::Query { devices: _ } => {
                 // let mut device_data = HashMap::new();
-                return Response::json(&FulfillmentResponse {
+                return json_response(&FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
                         // TODO
@@ -114,22 +119,26 @@ fn fulfillment(app_state: AppState, request: &Request) -> Response {
                         match e {
                             Execution::VolumeRelative { relative_steps } => {
                                 if let Err(e) = cec.volume_change(*relative_steps) {
-                                    return e.into();
+                                    return Response::from_string(e.to_string())
+                                        .with_status_code(StatusCode(500));
                                 }
                             }
                             Execution::Mute { mute } => {
                                 if let Err(e) = cec.mute(*mute) {
-                                    return e.into();
+                                    return Response::from_string(e.to_string())
+                                        .with_status_code(StatusCode(500));
                                 }
                             }
                             Execution::OnOff { on } => {
                                 if let Err(e) = cec.on_off(*on) {
-                                    return e.into();
+                                    return Response::from_string(e.to_string())
+                                        .with_status_code(StatusCode(500));
                                 }
                             }
                             Execution::WakeOnLan => {
                                 if let Err(e) = wol::wake(app_state.server_mac_addr) {
-                                    return Response::text(e.to_string()).with_status_code(500);
+                                    return Response::from_string(e.to_string())
+                                        .with_status_code(StatusCode(500));
                                 }
                             }
                             Execution::SetInput { new_input } => {
@@ -139,7 +148,7 @@ fn fulfillment(app_state: AppState, request: &Request) -> Response {
                                     "3" | "HDMI 3" => tv::Input::HDMI3,
                                     "4" | "HDMI 4" => tv::Input::HDMI4,
                                     _ => {
-                                        return Response::json(&FulfillmentResponse {
+                                        return json_response(&FulfillmentResponse {
                                             request_id: request_id,
                                             payload: json!({
                                                 "errorCode": ErrorCodes::NotSupported,
@@ -149,11 +158,12 @@ fn fulfillment(app_state: AppState, request: &Request) -> Response {
                                     }
                                 };
                                 if let Err(e) = cec.set_input(input) {
-                                    return e.into();
+                                    return Response::from_string(e.to_string())
+                                        .with_status_code(StatusCode(500));
                                 }
                             }
                             _ => {
-                                return Response::json(&FulfillmentResponse {
+                                return json_response(&FulfillmentResponse {
                                     request_id: request_id,
                                     payload: json!({
                                         "errorCode": ErrorCodes::NotSupported,
@@ -163,7 +173,7 @@ fn fulfillment(app_state: AppState, request: &Request) -> Response {
                             }
                         }
                         // TODO(stvn): Do all executions in the array, improve error handling
-                        return Response::json(&FulfillmentResponse {
+                        return json_response(&FulfillmentResponse {
                             request_id: request_id,
                             payload: json!({
                                 "commands": [
@@ -182,7 +192,7 @@ fn fulfillment(app_state: AppState, request: &Request) -> Response {
         }
     }
 
-    Response::json(&FulfillmentResponse {
+    json_response(&FulfillmentResponse {
         request_id: request_id,
         payload: json!({
             "errorCode": ErrorCodes::NotSupported,
@@ -191,12 +201,12 @@ fn fulfillment(app_state: AppState, request: &Request) -> Response {
     })
 }
 
-fn varz() -> Response {
+fn varz() -> Response<Cursor<Vec<u8>>> {
     let metrics = prometheus::gather();
     let encoder = prometheus::TextEncoder::new();
     match encoder.encode_to_string(&metrics) {
-        Ok(encoded) => Response::text(encoded),
-        Err(err) => Response::text(err.to_string()).with_status_code(500),
+        Ok(encoded) => Response::from_string(encoded),
+        Err(err) => Response::from_string(err.to_string()).with_status_code(StatusCode(500)),
     }
 }
 
@@ -226,22 +236,6 @@ struct Args {
     /// Server MAC address for WoL, in xx:xx:xx:xx:xx:xx form.
     #[arg(long, env = "SERVER_MAC_ADDR")]
     server_mac_addr: String,
-
-    /// Newline-separated tokens acceptable for Authorization header
-    #[arg(long, env = "AUTH_TOKENS")]
-    auth_tokens: Option<String>,
-
-    /// Permitted emails for login
-    #[arg(long, env = "ALLOWED_EMAILS")]
-    allowed_emails: Vec<String>,
-
-    /// Client id for OIDC login
-    #[arg(long, env = "OIDC_CLIENT_ID")]
-    oidc_client_id: Option<String>,
-
-    /// Client secret for OIDC login
-    #[arg(long, env = "OIDC_CLIENT_SECRET")]
-    oidc_client_secret: Option<String>,
 }
 
 #[derive(Clone)]
@@ -298,62 +292,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         server_mac_addr[i] = u8::from_str_radix(s, 16)?;
     }
 
-    let mut auth_tokens = HashSet::new();
-    if let Some(tokens) = args.auth_tokens {
-        for line in tokens.lines() {
-            if line.trim() != "" && !line.starts_with("#") {
-                auth_tokens.insert(line.trim().to_string());
-            }
-        }
-    }
-    let mut allowed_emails = HashSet::new();
-    for e in args.allowed_emails {
-        allowed_emails.insert(e);
-    }
-
-    let authorizer = match (args.oidc_client_id, args.oidc_client_secret) {
-        (Some(oidc_client_id), Some(oidc_client_secret)) => {
-            info!("enforcing login");
-            Some(auth::Authorizer::new(
-                auth_tokens,
-                allowed_emails,
-                oidc_client_id,
-                oidc_client_secret,
-            ))
-        }
-        _ => {
-            info!("not enforcing login");
-            None
-        }
-    };
-
     let app_state = AppState {
         cec: conn,
         server_mac_addr,
     };
 
     info!("Starting server...");
+    let server = Server::http(&args.http_addr).unwrap();
 
-    rouille::start_server(&args.http_addr, move |request| {
+    for mut request in server.incoming_requests() {
         info!(
             "{method} {url}",
             method = request.method(),
-            url = request.raw_url(),
+            url = request.url(),
         );
-        let route = |req: &Request| {
-            router!(req,
-                (GET) ["/"] => {index()},
-                (GET) ["/manifest.json"] => {manifest()},
-                (GET) ["/varz"] => {varz()},
-                (POST) ["/fulfillment"] => {fulfillment(app_state.clone(), req)},
-                _ => rouille::Response::empty_404()
-            )
-        };
-        let resp = match &authorizer {
-            Some(a) => a.ensure_authorized(request, route),
-            None => route(request),
-        };
-        info!("... {status}", status = resp.status_code,);
-        resp
-    });
+
+        let app_state = app_state.clone();
+
+        std::thread::spawn(move || {
+            let route = |req: &mut Request| -> Response<Cursor<Vec<u8>>> {
+                let url = req.url().to_string();
+                let path = if let Some(idx) = url.find('?') {
+                    &url[..idx]
+                } else {
+                    &url
+                };
+
+                match (req.method(), path) {
+                    (Method::Get, "/") => index(),
+                    (Method::Get, "/manifest.json") => manifest(),
+                    (Method::Get, "/varz") => varz(),
+                    (Method::Post, "/fulfillment") => fulfillment(app_state, req),
+                    _ => Response::from_data(Vec::new()).with_status_code(StatusCode(404)),
+                }
+            };
+
+            let resp = route(&mut request);
+
+            info!("... {status}", status = resp.status_code().0);
+            let _ = request.respond(resp);
+        });
+    }
+
+    Ok(())
 }

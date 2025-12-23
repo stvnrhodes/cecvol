@@ -1,4 +1,3 @@
-use rouille::Response;
 use std::fmt;
 
 #[derive(Debug)]
@@ -18,12 +17,6 @@ impl fmt::Display for TVError {
 impl From<std::io::Error> for TVError {
     fn from(err: std::io::Error) -> Self {
         Self::Other(Box::new(err))
-    }
-}
-
-impl From<TVError> for Response {
-    fn from(e: TVError) -> Self {
-        Response::text(e.to_string()).with_status_code(500)
     }
 }
 
