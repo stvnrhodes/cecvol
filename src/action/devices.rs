@@ -411,3 +411,62 @@ pub struct FulfillmentResponse {
     pub request_id: String,
     pub payload: Value,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_deserialize_sync_request() {
+        let json = json!({
+            "requestId": "ff36a3cc-ec34-11e6-b1a0-64510650abcf",
+            "inputs": [{
+                "intent": "action.devices.SYNC"
+            }]
+        });
+
+        let req: FulfillmentRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.request_id, "ff36a3cc-ec34-11e6-b1a0-64510650abcf");
+        match &req.inputs[0] {
+            RequestPayload::Sync => {}
+            _ => panic!("Expected Sync payload"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_execute_request() {
+        let json = json!({
+            "requestId": "ff36a3cc-ec34-11e6-b1a0-64510650abcf",
+            "inputs": [{
+                "intent": "action.devices.EXECUTE",
+                "payload": {
+                    "commands": [{
+                        "devices": [{"id": "123"}],
+                        "execution": [{
+                            "command": "action.devices.commands.setVolume",
+                            "params": {
+                                "volumeLevel": 35
+                            }
+                        }]
+                    }]
+                }
+            }]
+        });
+
+        let req: FulfillmentRequest = serde_json::from_value(json).unwrap();
+        match &req.inputs[0] {
+            RequestPayload::Execute { commands } => {
+                let cmd = &commands[0];
+                assert_eq!(cmd.devices[0].id, "123");
+                match &cmd.execution[0] {
+                    Execution::SetVolume { volume_level } => {
+                        assert_eq!(*volume_level, 35);
+                    }
+                    _ => panic!("Expected SetVolume execution"),
+                }
+            }
+            _ => panic!("Expected Execute payload"),
+        }
+    }
+}
