@@ -25,6 +25,45 @@ const ENCRYPTION_KEY_ITERATIONS: u32 = 1 << 14;
 const RESPONSE_TERMINATOR: u8 = b'\n';
 // encryptionKeyDigest: "sha256",
 
+#[derive(Debug)]
+pub enum DecryptionError {
+    PaddingError(block_padding::UnpadError),
+    SliceError(std::array::TryFromSliceError),
+    Utf8Error(std::str::Utf8Error),
+    InvalidLength,
+}
+
+impl std::fmt::Display for DecryptionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            DecryptionError::PaddingError(_) => write!(f, "Padding error"),
+            DecryptionError::SliceError(e) => write!(f, "Slice error: {}", e),
+            DecryptionError::Utf8Error(e) => write!(f, "UTF-8 error: {}", e),
+            DecryptionError::InvalidLength => write!(f, "Invalid length"),
+        }
+    }
+}
+
+impl std::error::Error for DecryptionError {}
+
+impl From<block_padding::UnpadError> for DecryptionError {
+    fn from(err: block_padding::UnpadError) -> Self {
+        DecryptionError::PaddingError(err)
+    }
+}
+
+impl From<std::array::TryFromSliceError> for DecryptionError {
+    fn from(err: std::array::TryFromSliceError) -> Self {
+        DecryptionError::SliceError(err)
+    }
+}
+
+impl From<std::str::Utf8Error> for DecryptionError {
+    fn from(err: std::str::Utf8Error) -> Self {
+        DecryptionError::Utf8Error(err)
+    }
+}
+
 pub struct LGTV {
     addr: String,
     mac_address: [u8; 6],
@@ -63,18 +102,17 @@ impl LGTV {
         encoded.extend(encryptor.encrypt_padded_vec_mut::<Pkcs7>(cmd.as_bytes()));
         encoded
     }
-    fn decrypt(&self, cipher: &[u8]) -> Result<String, std::str::Utf8Error> {
-        // TODO: Don't unwrap
+    fn decrypt(&self, cipher: &[u8]) -> Result<String, DecryptionError> {
         let iv_decryptor = ecb::Decryptor::<aes::Aes128>::new(&self.derived_key.into());
         let iv_vec = iv_decryptor
-            .decrypt_padded_vec_mut::<NoPadding>(cipher[..ENCRYPTION_KEY_LENGTH].into())
-            .unwrap();
-        let iv: [u8; ENCRYPTION_IV_LENGTH] = iv_vec.try_into().unwrap();
+            .decrypt_padded_vec_mut::<NoPadding>(cipher[..ENCRYPTION_KEY_LENGTH].into())?;
+        let iv: [u8; ENCRYPTION_IV_LENGTH] = iv_vec
+            .try_into()
+            .map_err(|_| DecryptionError::InvalidLength)?;
 
         let decryptor = cbc::Decryptor::<aes::Aes128>::new(&self.derived_key.into(), &iv.into());
         let decrypted = decryptor
-            .decrypt_padded_vec_mut::<NoPadding>(cipher[ENCRYPTION_KEY_LENGTH..].into())
-            .unwrap();
+            .decrypt_padded_vec_mut::<NoPadding>(cipher[ENCRYPTION_KEY_LENGTH..].into())?;
         let end = decrypted
             .iter()
             .position(|&x| x == RESPONSE_TERMINATOR)
@@ -92,8 +130,9 @@ impl LGTV {
         stream.write(&payload)?;
         let mut resp = [0; 512];
         let len = stream.read(&mut resp)?;
-        // TODO: Convert error
-        let decrypted = self.decrypt(&resp[..len]).unwrap();
+        let decrypted = self
+            .decrypt(&resp[..len])
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         info!("{}", decrypted);
         Ok(decrypted)
     }

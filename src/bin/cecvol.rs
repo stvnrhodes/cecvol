@@ -9,7 +9,7 @@ use action::devices::{
 };
 
 use clap::Parser;
-use log::info;
+use log::{error, info};
 use serde::Serialize;
 use serde_json::json;
 use std::io::Cursor;
@@ -41,12 +41,16 @@ fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Ve
 
     let mut content = String::new();
     if let Err(e) = request.as_reader().read_to_string(&mut content) {
+        error!("Failed to read request body: {}", e);
         return Response::from_string(e.to_string()).with_status_code(StatusCode(400));
     }
 
     let req: FulfillmentRequest = match serde_json::from_str(&content) {
         Ok(r) => r,
-        Err(e) => return Response::from_string(e.to_string()).with_status_code(StatusCode(400)),
+        Err(e) => {
+            error!("Failed to parse JSON: {}", e);
+            return Response::from_string(e.to_string()).with_status_code(StatusCode(400));
+        }
     };
 
     let request_id = req.request_id.clone();
@@ -119,24 +123,28 @@ fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Ve
                         match e {
                             Execution::VolumeRelative { relative_steps } => {
                                 if let Err(e) = cec.volume_change(*relative_steps) {
+                                    error!("Failed to change volume: {}", e);
                                     return Response::from_string(e.to_string())
                                         .with_status_code(StatusCode(500));
                                 }
                             }
                             Execution::Mute { mute } => {
                                 if let Err(e) = cec.mute(*mute) {
+                                    error!("Failed to mute: {}", e);
                                     return Response::from_string(e.to_string())
                                         .with_status_code(StatusCode(500));
                                 }
                             }
                             Execution::OnOff { on } => {
                                 if let Err(e) = cec.on_off(*on) {
+                                    error!("Failed to turn on/off: {}", e);
                                     return Response::from_string(e.to_string())
                                         .with_status_code(StatusCode(500));
                                 }
                             }
                             Execution::WakeOnLan => {
                                 if let Err(e) = wol::wake(app_state.server_mac_addr) {
+                                    error!("Failed to wake on lan: {}", e);
                                     return Response::from_string(e.to_string())
                                         .with_status_code(StatusCode(500));
                                 }
@@ -148,30 +156,34 @@ fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Ve
                                     "3" | "HDMI 3" => tv::Input::HDMI3,
                                     "4" | "HDMI 4" => tv::Input::HDMI4,
                                     _ => {
+                                        error!("Unsupported input: {}", new_input);
                                         return json_response(&FulfillmentResponse {
                                             request_id: request_id,
                                             payload: json!({
                                                 "errorCode": ErrorCodes::NotSupported,
                                                 "debugString": "unsupported input",
                                             }),
-                                        })
+                                        });
                                     }
                                 };
                                 if let Err(e) = cec.set_input(input) {
+                                    error!("Failed to set input: {}", e);
                                     return Response::from_string(e.to_string())
                                         .with_status_code(StatusCode(500));
                                 }
                             }
                             _ => {
+                                error!("Unknown command: {:?}", e);
                                 return json_response(&FulfillmentResponse {
                                     request_id: request_id,
                                     payload: json!({
                                         "errorCode": ErrorCodes::NotSupported,
                                         "debugString": "unknown command",
                                     }),
-                                })
+                                });
                             }
                         }
+
                         // TODO(stvn): Do all executions in the array, improve error handling
                         return json_response(&FulfillmentResponse {
                             request_id: request_id,

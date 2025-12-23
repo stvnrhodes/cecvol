@@ -18,7 +18,6 @@ The core application logic.
 **Key Technologies:**
 
 - **Language:** Rust
-- **Web Framework:** `rouille`
 - **CEC Interface:** direct `ioctl` calls to `/dev/vchiq` (Raspberry Pi specific).
 - **LG IP Control:** TCP with symmetric encryption (AES).
 - **Metrics:** Prometheus (`/varz`).
