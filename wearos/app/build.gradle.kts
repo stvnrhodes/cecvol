@@ -1,16 +1,16 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
     namespace = "com.stevenandbonnie.cecvol"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.stevenandbonnie.cecvol"
         minSdk = 30
-        targetSdk = 34
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
         vectorDrawables {
@@ -29,17 +29,11 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
-    }
-    kotlinOptions {
-        jvmTarget = "1.8"
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     buildFeatures {
         compose = true
-    }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.1"
     }
     packaging {
         resources {
@@ -48,23 +42,29 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 dependencies {
 
-    implementation("androidx.activity:activity-compose:1.8.2")
-    implementation("androidx.datastore:datastore-preferences:1.0.0")
+    implementation("androidx.activity:activity-compose:1.9.1")
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.material:material-icons-extended:1.5.4")
+    implementation("androidx.compose.material:material-icons-extended:1.7.0")
     implementation("androidx.core:core-splashscreen:1.0.1")
-    implementation("androidx.wear.compose:compose-foundation:1.2.1")
-    implementation("androidx.wear.compose:compose-material:1.2.1")
+    implementation("androidx.wear.compose:compose-foundation:1.6.1")
+    implementation("androidx.wear.compose:compose-material:1.6.1")
     implementation("androidx.wear:wear-input:1.2.0-alpha02")
     implementation("androidx.wear:wear-tooling-preview:1.0.0")
-    implementation("com.google.android.gms:play-services-wearable:18.1.0")
-    implementation("com.google.android.horologist:horologist-compose-layout:0.5.19")
-    implementation("com.google.code.gson:gson:2.10.1")
-    implementation(platform("androidx.compose:compose-bom:2023.08.00"))
-    androidTestImplementation(platform("androidx.compose:compose-bom:2023.08.00"))
+    implementation("com.google.android.gms:play-services-wearable:18.2.0")
+    implementation("com.google.android.horologist:horologist-compose-layout:0.7.10")
+    implementation("com.google.code.gson:gson:2.14.0")
+    implementation(platform("androidx.compose:compose-bom:2026.04.01"))
+    androidTestImplementation(platform("androidx.compose:compose-bom:2026.04.01"))
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
