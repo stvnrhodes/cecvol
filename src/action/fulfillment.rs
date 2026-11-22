@@ -61,7 +61,33 @@ impl FulfillmentHandler {
             match input {
                 RequestPayload::Sync => {
                     info!("SYNC req={} user={}", request_id, agent_user_id);
-                    let command_only = !self.cec.lock().unwrap().supports_state_query();
+                    let supports_state = self.cec.lock().unwrap().supports_state_query();
+                    let command_only = !supports_state;
+                    let mut traits = vec![
+                        "action.devices.traits.InputSelector",
+                        "action.devices.traits.OnOff",
+                        "action.devices.traits.TransportControl",
+                        "action.devices.traits.Volume",
+                    ];
+                    let mut attributes = json!({
+                        "availableInputs": available_inputs(),
+                        "commandOnlyInputSelector": true,
+                        "orderedInputs": false,
+                        "commandOnlyOnOff": command_only,
+                        "queryOnlyOnOff": false,
+                        "transportControlSupportedCommands": ["PAUSE", "RESUME"],
+                        "volumeMaxLevel": 100,
+                        "volumeCanMuteAndUnmute": true,
+                        "volumeDefaultPercentage": 15,
+                        "levelStepSize": self.volume_step_size,
+                        "commandOnlyVolume": command_only
+                    });
+                    if supports_state {
+                        traits.push("action.devices.traits.MediaState");
+                        let attrs = attributes.as_object_mut().unwrap();
+                        attrs.insert("supportActivityState".to_string(), json!(true));
+                        attrs.insert("supportPlaybackState".to_string(), json!(false));
+                    }
                     return serde_json::to_value(&FulfillmentResponse {
                         request_id,
                         payload: json!({
@@ -70,12 +96,7 @@ impl FulfillmentHandler {
                                 {
                                     "id": DEVICE_ID,
                                     "type": "action.devices.types.TV",
-                                    "traits": [
-                                        "action.devices.traits.InputSelector",
-                                        "action.devices.traits.OnOff",
-                                        "action.devices.traits.TransportControl",
-                                        "action.devices.traits.Volume"
-                                    ],
+                                    "traits": traits,
                                     "name": {
                                         "name": "cecvol"
                                     },
@@ -84,19 +105,7 @@ impl FulfillmentHandler {
                                         "manufacturer": "LG",
                                         "model": "cecvol"
                                     },
-                                    "attributes": {
-                                        "availableInputs": available_inputs(),
-                                        "commandOnlyInputSelector": true,
-                                        "orderedInputs": false,
-                                        "commandOnlyOnOff": command_only,
-                                        "queryOnlyOnOff": false,
-                                        "transportControlSupportedCommands": ["PAUSE", "RESUME"],
-                                        "volumeMaxLevel": 100,
-                                        "volumeCanMuteAndUnmute": true,
-                                        "volumeDefaultPercentage": 15,
-                                        "levelStepSize": self.volume_step_size,
-                                        "commandOnlyVolume": command_only
-                                    }
+                                    "attributes": attributes
                                 }
                             ]
                         }),
@@ -141,6 +150,10 @@ impl FulfillmentHandler {
                             state.insert("status".to_string(), json!("SUCCESS"));
                             if let Some((on, vol, is_muted)) = queried_state {
                                 state.insert("on".to_string(), json!(on));
+                                state.insert(
+                                    "activityState".to_string(),
+                                    json!(if on { "ACTIVE" } else { "STANDBY" }),
+                                );
                                 state.insert("currentVolume".to_string(), json!(vol));
                                 state.insert("isMuted".to_string(), json!(is_muted));
                             }
@@ -187,6 +200,10 @@ impl FulfillmentHandler {
                                         .map(|()| {
                                             if supports_state {
                                                 states.insert("on".to_string(), json!(true));
+                                                states.insert(
+                                                    "activityState".to_string(),
+                                                    json!("ACTIVE"),
+                                                );
                                                 if let Ok(Some(vol)) = cec.get_volume() {
                                                     states.insert(
                                                         "currentVolume".to_string(),
@@ -210,6 +227,10 @@ impl FulfillmentHandler {
                                             if supports_state {
                                                 states.insert("on".to_string(), json!(true));
                                                 states.insert(
+                                                    "activityState".to_string(),
+                                                    json!("ACTIVE"),
+                                                );
+                                                states.insert(
                                                     "currentVolume".to_string(),
                                                     json!(clamped),
                                                 );
@@ -228,6 +249,10 @@ impl FulfillmentHandler {
                                     .map(|()| {
                                         if supports_state {
                                             states.insert("on".to_string(), json!(true));
+                                            states.insert(
+                                                "activityState".to_string(),
+                                                json!("ACTIVE"),
+                                            );
                                             states.insert("isMuted".to_string(), json!(*mute));
                                             if let Ok(Some(vol)) = cec.get_volume() {
                                                 states.insert(
@@ -246,6 +271,10 @@ impl FulfillmentHandler {
                                     .map(|()| {
                                         if supports_state {
                                             states.insert("on".to_string(), json!(*on));
+                                            states.insert(
+                                                "activityState".to_string(),
+                                                json!(if *on { "ACTIVE" } else { "STANDBY" }),
+                                            );
                                         }
                                     })
                                     .map_err(|err| {
@@ -479,6 +508,12 @@ mod tests {
         assert!(dev.get("roomHint").is_none());
         assert_eq!(dev["attributes"]["commandOnlyOnOff"], false);
         assert_eq!(dev["attributes"]["commandOnlyVolume"], false);
+        assert_eq!(dev["attributes"]["supportActivityState"], true);
+        assert_eq!(dev["attributes"]["supportPlaybackState"], false);
+        assert!(dev["traits"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("action.devices.traits.MediaState")));
         assert_eq!(
             dev["attributes"]["transportControlSupportedCommands"],
             json!(["PAUSE", "RESUME"])
@@ -498,6 +533,10 @@ mod tests {
         let dev = &sync_resp["payload"]["devices"][0];
         assert_eq!(dev["attributes"]["commandOnlyOnOff"], true);
         assert_eq!(dev["attributes"]["commandOnlyVolume"], true);
+        assert!(!dev["traits"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("action.devices.traits.MediaState")));
 
         let query_req: FulfillmentRequest = serde_json::from_value(json!({
             "requestId": "req-query-cmd",
@@ -512,6 +551,7 @@ mod tests {
         assert_eq!(state["online"], true);
         assert_eq!(state["status"], "SUCCESS");
         assert!(state.get("on").is_none());
+        assert!(state.get("activityState").is_none());
         assert!(state.get("currentVolume").is_none());
         assert!(state.get("isMuted").is_none());
     }
@@ -534,6 +574,7 @@ mod tests {
         assert_eq!(resp["payload"]["devices"]["1"]["online"], true);
         assert_eq!(resp["payload"]["devices"]["1"]["status"], "SUCCESS");
         assert_eq!(resp["payload"]["devices"]["1"]["on"], true);
+        assert_eq!(resp["payload"]["devices"]["1"]["activityState"], "ACTIVE");
         assert_eq!(resp["payload"]["devices"]["1"]["currentVolume"], 19);
         assert_eq!(resp["payload"]["devices"]["1"]["isMuted"], false);
         assert_eq!(resp["payload"]["devices"]["999"]["online"], false);
@@ -561,6 +602,7 @@ mod tests {
         assert_eq!(resp["payload"]["devices"]["1"]["online"], true);
         assert_eq!(resp["payload"]["devices"]["1"]["status"], "SUCCESS");
         assert_eq!(resp["payload"]["devices"]["1"]["on"], false);
+        assert_eq!(resp["payload"]["devices"]["1"]["activityState"], "STANDBY");
         assert_eq!(resp["payload"]["devices"]["1"]["currentVolume"], 0);
         assert_eq!(resp["payload"]["devices"]["1"]["isMuted"], false);
     }
@@ -613,6 +655,7 @@ mod tests {
             json!({
                 "online": true,
                 "on": true,
+                "activityState": "ACTIVE",
                 "currentVolume": 20,
                 "isMuted": false
             })
