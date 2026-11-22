@@ -547,6 +547,12 @@ impl tv::TVConnection for CEC {
     fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError> {
         Ok(self.volume_change(relative_steps)?)
     }
+    fn set_volume(&mut self, _level: i32) -> Result<(), TVError> {
+        Err(TVError::Other("set_volume not supported over CEC".into()))
+    }
+    fn get_volume(&mut self) -> Result<Option<i32>, TVError> {
+        Ok(None)
+    }
     fn mute(&mut self, mute: bool) -> Result<(), TVError> {
         Ok(self.mute(mute)?)
     }

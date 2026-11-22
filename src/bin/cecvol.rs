@@ -106,13 +106,44 @@ fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Ve
                     }),
                 });
             }
-            RequestPayload::Query { devices: _ } => {
-                // let mut device_data = HashMap::new();
+            RequestPayload::Query { devices } => {
+                let mut device_data = serde_json::Map::new();
+                let current_volume = if devices.iter().any(|d| d.id == DEVICE_ID) {
+                    let mut cec = cec.lock().unwrap();
+                    match cec.get_volume() {
+                        Ok(vol) => vol,
+                        Err(e) => {
+                            error!("Failed to query volume: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+                for d in devices {
+                    if d.id == DEVICE_ID {
+                        let mut state = serde_json::Map::new();
+                        state.insert("online".to_string(), json!(true));
+                        state.insert("status".to_string(), json!("SUCCESS"));
+                        if let Some(vol) = current_volume {
+                            state.insert("currentVolume".to_string(), json!(vol));
+                        }
+                        device_data.insert(d.id.clone(), serde_json::Value::Object(state));
+                    } else {
+                        device_data.insert(
+                            d.id.clone(),
+                            json!({
+                                "online": false,
+                                "status": "ERROR",
+                                "errorCode": "deviceNotFound",
+                            }),
+                        );
+                    }
+                }
                 return json_response(&FulfillmentResponse {
                     request_id: request_id,
                     payload: json!({
-                        // TODO
-                        // "devices": device_data,
+                        "devices": device_data,
                     }),
                 });
             }
@@ -121,6 +152,13 @@ fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Ve
                 for c in commands {
                     for e in &c.execution {
                         match e {
+                            Execution::SetVolume { volume_level } => {
+                                if let Err(e) = cec.set_volume(*volume_level) {
+                                    error!("Failed to set volume: {}", e);
+                                    return Response::from_string(e.to_string())
+                                        .with_status_code(StatusCode(500));
+                                }
+                            }
                             Execution::VolumeRelative { relative_steps } => {
                                 if let Err(e) = cec.volume_change(*relative_steps) {
                                     error!("Failed to change volume: {}", e);

@@ -40,6 +40,8 @@ pub enum Key {
 pub trait TVConnection {
     fn on_off(&mut self, on: bool) -> Result<(), TVError>;
     fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError>;
+    fn set_volume(&mut self, level: i32) -> Result<(), TVError>;
+    fn get_volume(&mut self) -> Result<Option<i32>, TVError>;
     fn mute(&mut self, mute: bool) -> Result<(), TVError>;
     fn set_input(&mut self, input: Input) -> Result<(), TVError>;
     fn play_pause(&mut self) -> Result<(), TVError>;

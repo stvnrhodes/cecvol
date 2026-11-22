@@ -143,6 +143,18 @@ impl LGTV {
     }
 }
 
+fn parse_volume(resp: &str) -> io::Result<i32> {
+    let vol_str = resp.trim().strip_prefix("VOL:").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unexpected volume response: {resp}"),
+        )
+    })?;
+    vol_str
+        .parse::<i32>()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
 impl tv::TVConnection for LGTV {
     fn on_off(&mut self, on: bool) -> Result<(), TVError> {
         if on {
@@ -163,6 +175,16 @@ impl tv::TVConnection for LGTV {
             }
         }
         Ok(())
+    }
+    fn set_volume(&mut self, level: i32) -> Result<(), TVError> {
+        let clamped = level.clamp(0, 100);
+        let cmd = format!("VOLUME_CONTROL {clamped}\r");
+        self.send_command(&cmd)?;
+        Ok(())
+    }
+    fn get_volume(&mut self) -> Result<Option<i32>, TVError> {
+        let resp = self.send_command("CURRENT_VOL\r")?;
+        Ok(Some(parse_volume(&resp)?))
     }
     fn mute(&mut self, mute: bool) -> Result<(), TVError> {
         let m = if mute { "on" } else { "off" };
@@ -249,5 +271,12 @@ mod tests {
         ];
         let decrypted = tv.decrypt(encrypted).unwrap();
         assert_eq!(&decrypted, "OK");
+    }
+
+    #[test]
+    fn test_parse_volume() {
+        assert_eq!(parse_volume("VOL:19").unwrap(), 19);
+        assert_eq!(parse_volume("VOL:0\r\n").unwrap(), 0);
+        assert!(parse_volume("OK").is_err());
     }
 }

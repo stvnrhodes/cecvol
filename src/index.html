@@ -41,7 +41,7 @@
             max-width: 400px;
             display: flex;
             flex-direction: column;
-            gap: clamp(12px, 2dvh, 20px);
+            gap: clamp(10px, 1.8dvh, 18px);
         }
 
         .dpad,
@@ -49,7 +49,7 @@
         .inputs,
         .wol {
             display: grid;
-            gap: clamp(8px, 1.4dvh, 12px);
+            gap: clamp(8px, 1.2dvh, 12px);
         }
 
         .dpad,
@@ -65,20 +65,44 @@
             grid-template-columns: 1fr;
         }
 
+        .volume-slider-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 2px 4px;
+        }
+
+        .volume-slider-row input[type="range"] {
+            flex: 1;
+            height: 32px;
+            accent-color: #6200ee;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+
+        .volume-value {
+            min-width: 2.5ch;
+            text-align: right;
+            font-family: Roboto, sans-serif;
+            font-size: 1.1rem;
+            font-weight: 500;
+            font-variant-numeric: tabular-nums;
+        }
+
         .remote .mdc-button {
             width: 100%;
-            height: clamp(50px, 8dvh, 68px);
-            font-size: clamp(1rem, 2.2dvh, 1.25rem);
+            height: clamp(46px, 7.2dvh, 62px);
+            font-size: clamp(1rem, 2.2dvh, 1.2rem);
             border-radius: 10px;
             touch-action: manipulation;
         }
 
         .remote .dpad .mdc-button {
-            height: clamp(58px, 10dvh, 84px);
+            height: clamp(54px, 9dvh, 78px);
         }
 
         .remote .material-icons {
-            font-size: clamp(28px, 4dvh, 36px);
+            font-size: clamp(26px, 3.8dvh, 34px);
         }
 
         .status-row {
@@ -93,7 +117,7 @@
     </style>
     <script>
         function executeCommand(cmd) {
-            fetch('/fulfillment', {
+            return fetch('/fulfillment', {
                 method: 'POST',
                 mode: 'same-origin',
                 headers: {
@@ -106,7 +130,7 @@
                         'payload': {
                             'commands': [{
                                 'devices': [{
-                                    'id': '123'
+                                    'id': '1'
                                 }],
                                 'execution': [cmd]
                             }]
@@ -118,11 +142,52 @@
                 .then(data => {
                     console.log(data);
                     document.getElementById("status").style.visibility = "hidden";
+                    return data;
                 })
                 .catch(e => {
                     console.log(e);
                     document.getElementById("status").textContent = e;
                     document.getElementById("status").style.visibility = "visible";
+                });
+        }
+        function updateVolumeUI(level) {
+            const slider = document.getElementById('volume-slider');
+            const label = document.getElementById('volume-value');
+            if (typeof level === 'number' && !Number.isNaN(level)) {
+                slider.value = level;
+                label.textContent = level;
+            } else {
+                label.textContent = '--';
+            }
+        }
+        function refreshVolume() {
+            fetch('/fulfillment', {
+                method: 'POST',
+                mode: 'same-origin',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    'requestId': 'no-id',
+                    'inputs': [{
+                        'intent': 'action.devices.QUERY',
+                        'payload': {
+                            'devices': [{
+                                'id': '1'
+                            }]
+                        }
+                    }]
+                })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    const dev = data && data.payload && data.payload.devices && data.payload.devices['1'];
+                    if (dev && typeof dev.currentVolume === 'number') {
+                        updateVolumeUI(dev.currentVolume);
+                    }
+                })
+                .catch(e => {
+                    console.log(e);
                 });
         }
         function sendVol(level) {
@@ -131,7 +196,17 @@
                 'params': {
                     'relativeSteps': level
                 }
-            })
+            }).then(() => refreshVolume());
+        }
+        function setVolume(level) {
+            const vol = parseInt(level, 10);
+            updateVolumeUI(vol);
+            executeCommand({
+                'command': 'action.devices.commands.setVolume',
+                'params': {
+                    'volumeLevel': vol
+                }
+            });
         }
         function mute(mute) {
             executeCommand({
@@ -179,6 +254,12 @@
                 sendVol(-1) // down key
             }
         }
+        window.addEventListener('DOMContentLoaded', refreshVolume);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                refreshVolume();
+            }
+        });
     </script>
 </head>
 
@@ -236,6 +317,12 @@
                 <span class="mdc-button__ripple"></span>
                 <i class="material-icons">volume_up</i>
             </button>
+        </div>
+        <div class="volume-slider-row">
+            <input id="volume-slider" type="range" min="0" max="100" value="0"
+                oninput="document.getElementById('volume-value').textContent = this.value"
+                onchange="setVolume(this.value)" aria-label="Volume">
+            <span id="volume-value" class="volume-value">--</span>
         </div>
         <div class="inputs">
             <button class="mdc-button mdc-button--raised" onclick="setInput('1')">

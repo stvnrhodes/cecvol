@@ -534,4 +534,23 @@ mod tests {
             _ => panic!("Expected Execute payload"),
         }
     }
+
+    #[test]
+    fn test_deserialize_query_request() {
+        let json = json!({
+            "requestId": "no-id",
+            "inputs": [{
+                "intent": "action.devices.QUERY",
+                "payload": {
+                    "devices": [{"id": "1"}]
+                }
+            }]
+        });
+
+        let req: FulfillmentRequest = serde_json::from_value(json).unwrap();
+        match &req.inputs[0] {
+            RequestPayload::Query { devices } => assert_eq!(devices[0].id, "1"),
+            _ => panic!("Expected Query payload"),
+        }
+    }
 }
