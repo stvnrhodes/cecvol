@@ -95,7 +95,7 @@ impl FulfillmentHandler {
                             "devices": [
                                 {
                                     "id": DEVICE_ID,
-                                    "type": "action.devices.types.TV",
+                                    "type": "action.devices.types.AUDIO_VIDEO_RECEIVER",
                                     "traits": traits,
                                     "name": {
                                         "name": "cecvol"
@@ -503,7 +503,7 @@ mod tests {
         assert_eq!(resp["payload"]["agentUserId"], "user@example.com");
         let dev = &resp["payload"]["devices"][0];
         assert_eq!(dev["id"], "1");
-        assert_eq!(dev["type"], "action.devices.types.TV");
+        assert_eq!(dev["type"], "action.devices.types.AUDIO_VIDEO_RECEIVER");
         assert_eq!(dev["name"], json!({ "name": "cecvol" }));
         assert!(dev.get("roomHint").is_none());
         assert_eq!(dev["attributes"]["commandOnlyOnOff"], false);
