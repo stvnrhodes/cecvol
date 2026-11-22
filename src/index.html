@@ -26,6 +26,14 @@
             padding: 10px;
             visibility: hidden;
         }
+
+        .dpad {
+            display: grid;
+            grid-template-columns: repeat(3, 64px);
+            gap: 6px;
+            justify-content: center;
+            margin: 16px auto;
+        }
     </style>
     <script>
         function executeCommand(cmd) {
@@ -98,9 +106,12 @@
                 }
             })
         }
-        function playPause() {
+        function sendKey(key) {
             executeCommand({
-                'command': 'action.devices.commands.mediaPause',
+                'command': 'action.devices.commands.sendKey',
+                'params': {
+                    'key': key
+                }
             })
         }
         document.onkeydown = function (e) {
@@ -117,20 +128,44 @@
 
 <body>
     <h1>TV Control</h1>
-    <p>
+    <div class="dpad">
         <button class="mdc-button mdc-button--raised" onclick="onOff(false)">
             <span class="mdc-button__ripple"></span>
             <i class="material-icons">power_off</i>
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="sendKey('up')">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">keyboard_arrow_up</i>
         </button>
         <button class="mdc-button mdc-button--raised" onclick="onOff(true)">
             <span class="mdc-button__ripple"></span>
             <i class="material-icons">power</i>
         </button>
-        <button class="mdc-button mdc-button--raised" onclick="playPause()">
+        <button class="mdc-button mdc-button--raised" onclick="sendKey('left')">
             <span class="mdc-button__ripple"></span>
-            <i class="material-icons">play_arrow</i><i class="material-icons">pause</i>
+            <i class="material-icons">keyboard_arrow_left</i>
         </button>
-    </p>
+        <button class="mdc-button mdc-button--raised" onclick="sendKey('ok')">
+            <span class="mdc-button__ripple"></span>
+            OK
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="sendKey('right')">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">keyboard_arrow_right</i>
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="sendKey('back')">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">arrow_back</i>
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="sendKey('down')">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">keyboard_arrow_down</i>
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="sendKey('home')">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">home</i>
+        </button>
+    </div>
     <p>
         <button class="mdc-button mdc-button--raised" onclick="mute(true)">
             <span class="mdc-button__ripple"></span>

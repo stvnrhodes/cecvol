@@ -185,6 +185,19 @@ impl tv::TVConnection for LGTV {
         self.send_command("KEY_ACTION play\r")?;
         Ok(())
     }
+    fn send_key(&mut self, key: tv::Key) -> Result<(), TVError> {
+        let action = match key {
+            tv::Key::Up => "arrowup",
+            tv::Key::Down => "arrowdown",
+            tv::Key::Left => "arrowleft",
+            tv::Key::Right => "arrowright",
+            tv::Key::Ok => "ok",
+            tv::Key::Back => "returnback",
+            tv::Key::Home => "myapp",
+        };
+        self.send_command(&format!("KEY_ACTION {action}\r"))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

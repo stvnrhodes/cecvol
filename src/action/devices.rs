@@ -399,6 +399,10 @@ pub enum Execution {
     // Toggle play/pause media playback.
     #[serde(rename = "action.devices.commands.mediaPause")]
     MediaPause,
+
+    // Send a remote navigation/select key (custom command, not a real Google Smart Home command).
+    #[serde(rename = "action.devices.commands.sendKey")]
+    SendKey { key: String },
 }
 
 #[derive(Deserialize)]
@@ -496,6 +500,36 @@ mod tests {
             RequestPayload::Execute { commands } => match &commands[0].execution[0] {
                 Execution::MediaPause => {}
                 _ => panic!("Expected MediaPause execution"),
+            },
+            _ => panic!("Expected Execute payload"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_send_key_request() {
+        let json = json!({
+            "requestId": "no-id",
+            "inputs": [{
+                "intent": "action.devices.EXECUTE",
+                "payload": {
+                    "commands": [{
+                        "devices": [{"id": "123"}],
+                        "execution": [{
+                            "command": "action.devices.commands.sendKey",
+                            "params": {
+                                "key": "ok"
+                            }
+                        }]
+                    }]
+                }
+            }]
+        });
+
+        let req: FulfillmentRequest = serde_json::from_value(json).unwrap();
+        match &req.inputs[0] {
+            RequestPayload::Execute { commands } => match &commands[0].execution[0] {
+                Execution::SendKey { key } => assert_eq!(key, "ok"),
+                _ => panic!("Expected SendKey execution"),
             },
             _ => panic!("Expected Execute payload"),
         }

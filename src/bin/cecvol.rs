@@ -156,6 +156,32 @@ fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Ve
                                         .with_status_code(StatusCode(500));
                                 }
                             }
+                            Execution::SendKey { key } => {
+                                let key = match key.as_str() {
+                                    "up" => tv::Key::Up,
+                                    "down" => tv::Key::Down,
+                                    "left" => tv::Key::Left,
+                                    "right" => tv::Key::Right,
+                                    "ok" => tv::Key::Ok,
+                                    "back" => tv::Key::Back,
+                                    "home" => tv::Key::Home,
+                                    _ => {
+                                        error!("Unsupported key: {}", key);
+                                        return json_response(&FulfillmentResponse {
+                                            request_id: request_id,
+                                            payload: json!({
+                                                "errorCode": ErrorCodes::NotSupported,
+                                                "debugString": "unsupported key",
+                                            }),
+                                        });
+                                    }
+                                };
+                                if let Err(e) = cec.send_key(key) {
+                                    error!("Failed to send key: {}", e);
+                                    return Response::from_string(e.to_string())
+                                        .with_status_code(StatusCode(500));
+                                }
+                            }
                             Execution::SetInput { new_input } => {
                                 let input = match new_input.as_str() {
                                     "1" | "HDMI 1" => tv::Input::HDMI1,

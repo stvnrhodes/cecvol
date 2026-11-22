@@ -556,6 +556,9 @@ impl tv::TVConnection for CEC {
     fn play_pause(&mut self) -> Result<(), TVError> {
         Ok(self.play_pause()?)
     }
+    fn send_key(&mut self, key: tv::Key) -> Result<(), TVError> {
+        Ok(self.send_key(key)?)
+    }
 }
 
 pub struct CEC {
@@ -835,6 +838,18 @@ impl CEC {
     }
     pub fn play_pause(&mut self) -> Result<(), CECError> {
         self.press_key(UserControl::PausePlayFunction)
+    }
+    pub fn send_key(&mut self, key: tv::Key) -> Result<(), CECError> {
+        let code = match key {
+            tv::Key::Up => UserControl::Up,
+            tv::Key::Down => UserControl::Down,
+            tv::Key::Left => UserControl::Left,
+            tv::Key::Right => UserControl::Right,
+            tv::Key::Ok => UserControl::Select,
+            tv::Key::Back => UserControl::Exit,
+            tv::Key::Home => UserControl::RootMenu,
+        };
+        self.press_key(code)
     }
 
     pub fn transmit_raw(&self, input: &[u8]) -> Result<(), CECError> {

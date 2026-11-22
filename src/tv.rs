@@ -27,10 +27,21 @@ pub enum Input {
     HDMI4,
 }
 
+pub enum Key {
+    Up,
+    Down,
+    Left,
+    Right,
+    Ok,
+    Back,
+    Home,
+}
+
 pub trait TVConnection {
     fn on_off(&mut self, on: bool) -> Result<(), TVError>;
     fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError>;
     fn mute(&mut self, mute: bool) -> Result<(), TVError>;
     fn set_input(&mut self, input: Input) -> Result<(), TVError>;
     fn play_pause(&mut self) -> Result<(), TVError>;
+    fn send_key(&mut self, key: Key) -> Result<(), TVError>;
 }
