@@ -17,22 +17,78 @@
     <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
     <link rel="manifest" href="/manifest.json">
     <style>
-        h1,
-        p {
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 12px 16px;
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        h1 {
             text-align: center;
+            margin: 8px 0 16px;
+            font-size: clamp(1.5rem, 3.5dvh, 2rem);
+        }
+
+        .remote {
+            width: 100%;
+            max-width: 400px;
+            display: flex;
+            flex-direction: column;
+            gap: clamp(12px, 2dvh, 20px);
+        }
+
+        .dpad,
+        .volume,
+        .inputs,
+        .wol {
+            display: grid;
+            gap: clamp(8px, 1.4dvh, 12px);
+        }
+
+        .dpad,
+        .volume {
+            grid-template-columns: repeat(3, 1fr);
+        }
+
+        .inputs {
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .wol {
+            grid-template-columns: 1fr;
+        }
+
+        .remote .mdc-button {
+            width: 100%;
+            height: clamp(50px, 8dvh, 68px);
+            font-size: clamp(1rem, 2.2dvh, 1.25rem);
+            border-radius: 10px;
+            touch-action: manipulation;
+        }
+
+        .remote .dpad .mdc-button {
+            height: clamp(58px, 10dvh, 84px);
+        }
+
+        .remote .material-icons {
+            font-size: clamp(28px, 4dvh, 36px);
+        }
+
+        .status-row {
+            text-align: center;
+            margin: 8px 0 0;
         }
 
         #status {
             padding: 10px;
             visibility: hidden;
-        }
-
-        .dpad {
-            display: grid;
-            grid-template-columns: repeat(3, 64px);
-            gap: 6px;
-            justify-content: center;
-            margin: 16px auto;
         }
     </style>
     <script>
@@ -128,85 +184,85 @@
 
 <body>
     <h1>TV Control</h1>
-    <div class="dpad">
-        <button class="mdc-button mdc-button--raised" onclick="onOff(false)">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">power_off</i>
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="sendKey('up')">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">keyboard_arrow_up</i>
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="onOff(true)">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">power</i>
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="sendKey('left')">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">keyboard_arrow_left</i>
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="sendKey('ok')">
-            <span class="mdc-button__ripple"></span>
-            OK
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="sendKey('right')">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">keyboard_arrow_right</i>
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="sendKey('back')">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">arrow_back</i>
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="sendKey('down')">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">keyboard_arrow_down</i>
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="sendKey('home')">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">home</i>
-        </button>
+    <div class="remote">
+        <div class="dpad">
+            <button class="mdc-button mdc-button--raised" onclick="onOff(false)">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">power_off</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('up')">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">keyboard_arrow_up</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="onOff(true)">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">power</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('left')">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">keyboard_arrow_left</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('ok')">
+                <span class="mdc-button__ripple"></span>
+                OK
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('right')">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">keyboard_arrow_right</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('back')">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">arrow_back</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('down')">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">keyboard_arrow_down</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('home')">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">home</i>
+            </button>
+        </div>
+        <div class="volume">
+            <button class="mdc-button mdc-button--raised" onclick="mute(true)">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">volume_off</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendVol(-1)">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">volume_down</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendVol(1)">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">volume_up</i>
+            </button>
+        </div>
+        <div class="inputs">
+            <button class="mdc-button mdc-button--raised" onclick="setInput('1')">
+                <span class="mdc-button__ripple"></span>
+                hdmi1
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="setInput('2')">
+                <span class="mdc-button__ripple"></span>
+                hdmi2
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="setInput('3')">
+                <span class="mdc-button__ripple"></span>
+                hdmi3
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="setInput('4')">
+                <span class="mdc-button__ripple"></span>
+                hdmi4
+            </button>
+        </div>
+        <div class="wol">
+            <button class="mdc-button mdc-button--raised" onclick="wol()">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">transcribe</i>&nbsp;Wake Serpens
+            </button>
+        </div>
     </div>
-    <p>
-        <button class="mdc-button mdc-button--raised" onclick="mute(true)">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">volume_off</i>
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="sendVol(-1)">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">volume_down</i>
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="sendVol(1)">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">volume_up</i>
-        </button>
-    </p>
-    <p>
-        <button class="mdc-button mdc-button--raised" onclick="setInput('1')">
-            <span class="mdc-button__ripple"></span>
-            hdmi1
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="setInput('2')">
-            <span class="mdc-button__ripple"></span>
-            hdmi2
-        </button>
-    </p>
-    <p>
-        <button class="mdc-button mdc-button--raised" onclick="setInput('3')">
-            <span class="mdc-button__ripple"></span>
-            hdmi3
-        </button>
-        <button class="mdc-button mdc-button--raised" onclick="setInput('4')">
-            <span class="mdc-button__ripple"></span>
-            hdmi4
-        </button>
-    </p>
-    <p>
-        <button class="mdc-button mdc-button--raised" onclick="wol()">
-            <span class="mdc-button__ripple"></span>
-            <i class="material-icons">transcribe</i>&nbsp;Wake Serpens
-        </button>
-    </p>
-    <p><span id="status" class="mdc-elevation--z2">abc</span></p>
+    <p class="status-row"><span id="status" class="mdc-elevation--z2">abc</span></p>
 </body>
 
 </html>
