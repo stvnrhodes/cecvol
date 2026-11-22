@@ -1,297 +1,13 @@
-use cecvol::action;
+use cecvol::action::fulfillment::FulfillmentHandler;
 use cecvol::cec;
 use cecvol::lgip;
+use cecvol::oauth;
+use cecvol::server::{self, AppState};
 use cecvol::tv;
-use cecvol::wol;
-
-use action::devices::{
-    ErrorCodes, Execution, FulfillmentRequest, FulfillmentResponse, RequestPayload,
-};
 
 use clap::Parser;
-use log::{error, info};
-use serde::Serialize;
-use serde_json::json;
-use std::io::Cursor;
-
-use std::sync::Arc;
-use std::sync::Mutex;
-use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
-
-const DEVICE_ID: &str = "1";
-
-fn index() -> Response<Cursor<Vec<u8>>> {
-    Response::from_string(include_str!("../index.html"))
-        .with_header(Header::from_bytes("Content-Type", "text/html; charset=utf-8").unwrap())
-}
-
-fn manifest() -> Response<Cursor<Vec<u8>>> {
-    Response::from_data(include_str!("../manifest.json").as_bytes().to_vec())
-        .with_header(Header::from_bytes("Content-Type", "application/json; charset=utf-8").unwrap())
-}
-
-fn json_response<T: Serialize>(data: &T) -> Response<Cursor<Vec<u8>>> {
-    let s = serde_json::to_string(data).unwrap();
-    Response::from_string(s)
-        .with_header(Header::from_bytes("Content-Type", "application/json").unwrap())
-}
-
-fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Vec<u8>>> {
-    let cec = &app_state.cec;
-
-    let mut content = String::new();
-    if let Err(e) = request.as_reader().read_to_string(&mut content) {
-        error!("Failed to read request body: {}", e);
-        return Response::from_string(e.to_string()).with_status_code(StatusCode(400));
-    }
-
-    let req: FulfillmentRequest = match serde_json::from_str(&content) {
-        Ok(r) => r,
-        Err(e) => {
-            error!("Failed to parse JSON: {}", e);
-            return Response::from_string(e.to_string()).with_status_code(StatusCode(400));
-        }
-    };
-
-    let request_id = req.request_id.clone();
-    for input in &req.inputs {
-        match input {
-            RequestPayload::Sync => {
-                return json_response(&FulfillmentResponse {
-                    request_id: request_id,
-                    payload: json!({
-                        // TODO(stvn): Switch to oauth identity
-                        "agentUserId": "cecvol-stvn-user",
-                        "devices": [
-                            {
-                                "id": DEVICE_ID.to_string(),
-                                "type": "actions.devices.types.RemoteControl",
-                                "traits": [
-                                    "action.devices.traits.AppSelector",
-                                    "action.devices.traits.InputSelector",
-                                    "action.devices.traits.MediaState",
-                                    "action.devices.traits.OnOff",
-                                    "action.devices.traits.TransportControl",
-                                    "action.devices.traits.Volume"
-                                ],
-                                "name": {
-                                    "name": "cecvol",
-                                    "nicknames": ["pi", "cec"]
-                                },
-                                "willReportState": false,
-                                "roomHint": "living room",
-                                "deviceInfo": {
-                                    "manufacturer": "Raspberry Pi Foundation",
-                                    "model": "PI3P"
-                                },
-                                "attributes": {
-                                    "availableApplications": [],
-                                    "commandOnlyInputSelector": true,
-                                    "orderedInputs": false,
-                                    // TODO
-                                    // "availableInputs": inputs,
-                                    "supportActivityState": false,
-                                    "supportPlaybackState": false,
-                                    "commandOnlyOnOff": true,
-                                    "queryOnlyOnOff": false,
-                                    "transportControlSupportedCommands": ["PAUSE"],
-                                    "volumeMaxLevel": 100,
-                                    "volumeCanMuteAndUnmute": true,
-                                    "volumeDefaultPercentage": 12,
-                                    "levelStepSize": 1,
-                                    "commandOnlyVolume": true
-                                }
-                            }
-                        ]
-                    }),
-                });
-            }
-            RequestPayload::Query { devices } => {
-                let mut device_data = serde_json::Map::new();
-                let current_volume = if devices.iter().any(|d| d.id == DEVICE_ID) {
-                    let mut cec = cec.lock().unwrap();
-                    match cec.get_volume() {
-                        Ok(vol) => vol,
-                        Err(e) => {
-                            error!("Failed to query volume: {}", e);
-                            None
-                        }
-                    }
-                } else {
-                    None
-                };
-                for d in devices {
-                    if d.id == DEVICE_ID {
-                        let mut state = serde_json::Map::new();
-                        state.insert("online".to_string(), json!(true));
-                        state.insert("status".to_string(), json!("SUCCESS"));
-                        if let Some(vol) = current_volume {
-                            state.insert("currentVolume".to_string(), json!(vol));
-                        }
-                        device_data.insert(d.id.clone(), serde_json::Value::Object(state));
-                    } else {
-                        device_data.insert(
-                            d.id.clone(),
-                            json!({
-                                "online": false,
-                                "status": "ERROR",
-                                "errorCode": "deviceNotFound",
-                            }),
-                        );
-                    }
-                }
-                return json_response(&FulfillmentResponse {
-                    request_id: request_id,
-                    payload: json!({
-                        "devices": device_data,
-                    }),
-                });
-            }
-            RequestPayload::Execute { commands } => {
-                let mut cec = cec.lock().unwrap();
-                for c in commands {
-                    for e in &c.execution {
-                        match e {
-                            Execution::SetVolume { volume_level } => {
-                                if let Err(e) = cec.set_volume(*volume_level) {
-                                    error!("Failed to set volume: {}", e);
-                                    return Response::from_string(e.to_string())
-                                        .with_status_code(StatusCode(500));
-                                }
-                            }
-                            Execution::VolumeRelative { relative_steps } => {
-                                if let Err(e) = cec.volume_change(*relative_steps) {
-                                    error!("Failed to change volume: {}", e);
-                                    return Response::from_string(e.to_string())
-                                        .with_status_code(StatusCode(500));
-                                }
-                            }
-                            Execution::Mute { mute } => {
-                                if let Err(e) = cec.mute(*mute) {
-                                    error!("Failed to mute: {}", e);
-                                    return Response::from_string(e.to_string())
-                                        .with_status_code(StatusCode(500));
-                                }
-                            }
-                            Execution::OnOff { on } => {
-                                if let Err(e) = cec.on_off(*on) {
-                                    error!("Failed to turn on/off: {}", e);
-                                    return Response::from_string(e.to_string())
-                                        .with_status_code(StatusCode(500));
-                                }
-                            }
-                            Execution::WakeOnLan => {
-                                if let Err(e) = wol::wake(app_state.server_mac_addr) {
-                                    error!("Failed to wake on lan: {}", e);
-                                    return Response::from_string(e.to_string())
-                                        .with_status_code(StatusCode(500));
-                                }
-                            }
-                            Execution::MediaPause => {
-                                if let Err(e) = cec.play_pause() {
-                                    error!("Failed to toggle play/pause: {}", e);
-                                    return Response::from_string(e.to_string())
-                                        .with_status_code(StatusCode(500));
-                                }
-                            }
-                            Execution::SendKey { key } => {
-                                let key = match key.as_str() {
-                                    "up" => tv::Key::Up,
-                                    "down" => tv::Key::Down,
-                                    "left" => tv::Key::Left,
-                                    "right" => tv::Key::Right,
-                                    "ok" => tv::Key::Ok,
-                                    "back" => tv::Key::Back,
-                                    "home" => tv::Key::Home,
-                                    _ => {
-                                        error!("Unsupported key: {}", key);
-                                        return json_response(&FulfillmentResponse {
-                                            request_id: request_id,
-                                            payload: json!({
-                                                "errorCode": ErrorCodes::NotSupported,
-                                                "debugString": "unsupported key",
-                                            }),
-                                        });
-                                    }
-                                };
-                                if let Err(e) = cec.send_key(key) {
-                                    error!("Failed to send key: {}", e);
-                                    return Response::from_string(e.to_string())
-                                        .with_status_code(StatusCode(500));
-                                }
-                            }
-                            Execution::SetInput { new_input } => {
-                                let input = match new_input.as_str() {
-                                    "1" | "HDMI 1" => tv::Input::HDMI1,
-                                    "2" | "HDMI 2" => tv::Input::HDMI2,
-                                    "3" | "HDMI 3" => tv::Input::HDMI3,
-                                    "4" | "HDMI 4" => tv::Input::HDMI4,
-                                    _ => {
-                                        error!("Unsupported input: {}", new_input);
-                                        return json_response(&FulfillmentResponse {
-                                            request_id: request_id,
-                                            payload: json!({
-                                                "errorCode": ErrorCodes::NotSupported,
-                                                "debugString": "unsupported input",
-                                            }),
-                                        });
-                                    }
-                                };
-                                if let Err(e) = cec.set_input(input) {
-                                    error!("Failed to set input: {}", e);
-                                    return Response::from_string(e.to_string())
-                                        .with_status_code(StatusCode(500));
-                                }
-                            }
-                            _ => {
-                                error!("Unknown command: {:?}", e);
-                                return json_response(&FulfillmentResponse {
-                                    request_id: request_id,
-                                    payload: json!({
-                                        "errorCode": ErrorCodes::NotSupported,
-                                        "debugString": "unknown command",
-                                    }),
-                                });
-                            }
-                        }
-
-                        // TODO(stvn): Do all executions in the array, improve error handling
-                        return json_response(&FulfillmentResponse {
-                            request_id: request_id,
-                            payload: json!({
-                                "commands": [
-                                    {
-                                        "ids":  c.devices.iter().map(|d| d.id.clone()).collect::<Vec<String>>(),
-                                        "status": "SUCCESS",
-                                        // "states": device_state(&cec)
-                                    }
-                                ],
-                            }),
-                        });
-                    }
-                }
-            }
-            RequestPayload::Disconnect => println!("Disconnect"),
-        }
-    }
-
-    json_response(&FulfillmentResponse {
-        request_id: request_id,
-        payload: json!({
-            "errorCode": ErrorCodes::NotSupported,
-            "debugString": "no inputs provided",
-        }),
-    })
-}
-
-fn varz() -> Response<Cursor<Vec<u8>>> {
-    let metrics = prometheus::gather();
-    let encoder = prometheus::TextEncoder::new();
-    match encoder.encode_to_string(&metrics) {
-        Ok(encoded) => Response::from_string(encoded),
-        Err(err) => Response::from_string(err.to_string()).with_status_code(StatusCode(500)),
-    }
-}
+use log::{info, warn};
+use std::sync::{Arc, Mutex};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -319,12 +35,75 @@ struct Args {
     /// Server MAC address for WoL, in xx:xx:xx:xx:xx:xx form.
     #[arg(long, env = "SERVER_MAC_ADDR")]
     server_mac_addr: String,
+
+    /// OAuth 2.0 client ID for Google Home Cloud-to-Cloud account linking.
+    #[arg(long, env = "OAUTH_CLIENT_ID")]
+    oauth_client_id: Option<String>,
+
+    /// OAuth 2.0 client secret for Google Home Cloud-to-Cloud account linking (min 32 bytes).
+    #[arg(long, env = "OAUTH_CLIENT_SECRET")]
+    oauth_client_secret: Option<String>,
+
+    /// Separate HMAC signing key for OAuth tokens (min 32 bytes; rotate to revoke all tokens).
+    #[arg(long, env = "OAUTH_SIGNING_KEY")]
+    oauth_signing_key: Option<String>,
+
+    /// Google Home Developer Console project ID (automatically allows Google's prod + sandbox OAuth redirect URIs).
+    #[arg(long, env = "GOOGLE_PROJECT_ID")]
+    google_project_id: Option<String>,
+
+    /// Additional allowed OAuth redirect URIs (comma-separated).
+    #[arg(long, env = "OAUTH_REDIRECT_URIS", value_delimiter = ',')]
+    oauth_redirect_uri: Vec<String>,
+
+    /// Default relative volume step size advertised to Google Home.
+    #[arg(long, env = "VOLUME_STEP_SIZE", default_value_t = 3)]
+    volume_step_size: i32,
 }
 
-#[derive(Clone)]
-struct AppState {
-    server_mac_addr: [u8; 6],
-    cec: Arc<Mutex<Box<dyn tv::TVConnection + Sync + Send>>>,
+fn parse_mac(s: &str) -> Result<[u8; 6], Box<dyn std::error::Error>> {
+    let mut mac = [0u8; 6];
+    for (i, part) in s.split(':').enumerate() {
+        mac[i] = u8::from_str_radix(part, 16)?;
+    }
+    Ok(mac)
+}
+
+fn build_oauth_server(args: &Args) -> Result<Option<Arc<oauth::OAuthServer>>, String> {
+    match (
+        &args.oauth_client_id,
+        &args.oauth_client_secret,
+        &args.oauth_signing_key,
+    ) {
+        (None, None, None) => Ok(None),
+        (Some(client_id), Some(client_secret), Some(signing_key)) => {
+            let mut redirect_uris = args.oauth_redirect_uri.clone();
+            if let Some(project_id) = &args.google_project_id {
+                if !project_id.is_empty() {
+                    redirect_uris.extend(oauth::google_redirect_uris(project_id));
+                }
+            }
+            if redirect_uris.is_empty() {
+                warn!("OAuth client configured without --google-project-id or --oauth-redirect-uri; /oauth/authorize will reject all redirect URIs");
+            }
+            let server = oauth::OAuthServer::new(
+                client_id.clone(),
+                client_secret.clone(),
+                signing_key.clone(),
+                redirect_uris.clone(),
+            )
+            .map_err(|e| e.to_string())?;
+            info!(
+                "Google Home OAuth 2.0 enabled ({} allowed redirect URI(s))",
+                redirect_uris.len()
+            );
+            Ok(Some(Arc::new(server)))
+        }
+        _ => Err(
+            "OAUTH_CLIENT_ID, OAUTH_CLIENT_SECRET, and OAUTH_SIGNING_KEY must all be set to enable Google Home OAuth 2.0"
+                .to_string(),
+        ),
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -335,14 +114,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let tv: Box<dyn tv::TVConnection + Sync + Send> = if args.use_lg_ip_control {
-        let mut tv_mac_addr = [0u8; 6];
-        for (i, s) in args.lg_mac_addr.unwrap().split(":").enumerate() {
-            tv_mac_addr[i] = u8::from_str_radix(s, 16)?;
-        }
+        let tv_mac_addr = parse_mac(args.lg_mac_addr.as_deref().unwrap())?;
         Box::new(lgip::LGTV::new(
             "LGWebOSTV.local".to_string(),
             tv_mac_addr,
-            &args.lg_keycode.unwrap(),
+            args.lg_keycode.as_deref().unwrap(),
         ))
     } else {
         info!("Creating CEC connection...");
@@ -368,54 +144,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Box::new(cec_conn)
     };
 
-    let conn: Arc<Mutex<Box<dyn tv::TVConnection + Sync + Send>>> = Arc::new(Mutex::new(tv));
-
-    let mut server_mac_addr = [0u8; 6];
-    for (i, s) in args.server_mac_addr.split(":").enumerate() {
-        server_mac_addr[i] = u8::from_str_radix(s, 16)?;
-    }
-
     let app_state = AppState {
-        cec: conn,
-        server_mac_addr,
+        fulfillment: FulfillmentHandler {
+            cec: Arc::new(Mutex::new(tv)),
+            server_mac_addr: parse_mac(&args.server_mac_addr)?,
+            volume_step_size: args.volume_step_size,
+        },
+        oauth: build_oauth_server(&args)?,
     };
 
-    info!("Starting server...");
-    let server = Server::http(&args.http_addr).unwrap();
-
-    for mut request in server.incoming_requests() {
-        info!(
-            "{method} {url}",
-            method = request.method(),
-            url = request.url(),
-        );
-
-        let app_state = app_state.clone();
-
-        std::thread::spawn(move || {
-            let route = |req: &mut Request| -> Response<Cursor<Vec<u8>>> {
-                let url = req.url().to_string();
-                let path = if let Some(idx) = url.find('?') {
-                    &url[..idx]
-                } else {
-                    &url
-                };
-
-                match (req.method(), path) {
-                    (Method::Get, "/") => index(),
-                    (Method::Get, "/manifest.json") => manifest(),
-                    (Method::Get, "/varz") => varz(),
-                    (Method::Post, "/fulfillment") => fulfillment(app_state, req),
-                    _ => Response::from_data(Vec::new()).with_status_code(StatusCode(404)),
-                }
-            };
-
-            let resp = route(&mut request);
-
-            info!("... {status}", status = resp.status_code().0);
-            let _ = request.respond(resp);
-        });
-    }
-
-    Ok(())
+    server::run(&args.http_addr, app_state)
 }

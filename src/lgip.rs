@@ -127,7 +127,12 @@ impl LGTV {
         let addr = (self.addr.as_str(), LG_CONTROL_PORT)
             .to_socket_addrs()?
             .next()
-            .unwrap();
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::AddrNotAvailable,
+                    format!("could not resolve TV address: {}", self.addr),
+                )
+            })?;
         let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))?;
         stream.set_read_timeout(Some(Duration::from_millis(500)))?;
         stream.set_write_timeout(Some(Duration::from_millis(500)))?;
@@ -165,11 +170,21 @@ impl tv::TVConnection for LGTV {
         Ok(())
     }
     fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError> {
+        if relative_steps == 0 {
+            return Ok(());
+        }
+        // For multi-step changes (e.g. Google Home voice commands), read current volume and
+        // set directly in 2 round-trips instead of opening up to 25 sequential TCP connections.
+        if relative_steps.abs() > 1 {
+            if let Ok(Some(current)) = self.get_volume() {
+                return self.set_volume(current + relative_steps);
+            }
+        }
         if relative_steps < 0 {
             for _ in 0..-relative_steps {
                 self.send_command("KEY_ACTION volumedown\r")?;
             }
-        } else if relative_steps > 0 {
+        } else {
             for _ in 0..relative_steps {
                 self.send_command("KEY_ACTION volumeup\r")?;
             }

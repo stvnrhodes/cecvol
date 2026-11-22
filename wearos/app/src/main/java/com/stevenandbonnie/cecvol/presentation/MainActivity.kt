@@ -280,7 +280,7 @@ fun WearApp() {
               sendPostRequest(
                 Execution(
                   command = "action.devices.commands.wol",
-                  params = null,
+                  params = emptyMap(),
                 ), context
               )
             },

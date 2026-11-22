@@ -249,7 +249,6 @@ pub enum UserControl {
 
 #[derive(Debug)]
 pub enum CECError {
-    UnknownInputDevice(String),
     ParsingError(Error),
     Other(Box<dyn std::error::Error + Sync + Send>),
 }
@@ -258,7 +257,6 @@ impl std::error::Error for CECError {}
 impl fmt::Display for CECError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::UnknownInputDevice(err) => write!(f, "Unknown input device: {}", err),
             Self::ParsingError(err) => write!(f, "Parsing error: {}", err),
             Self::Other(err) => write!(f, "Application-specific error: {}", err),
         }
@@ -548,7 +546,9 @@ impl tv::TVConnection for CEC {
         Ok(self.volume_change(relative_steps)?)
     }
     fn set_volume(&mut self, _level: i32) -> Result<(), TVError> {
-        Err(TVError::Other("set_volume not supported over CEC".into()))
+        Err(TVError::Unsupported(
+            "absolute volume is not supported over CEC".to_string(),
+        ))
     }
     fn get_volume(&mut self) -> Result<Option<i32>, TVError> {
         Ok(None)
@@ -570,10 +570,6 @@ impl tv::TVConnection for CEC {
 pub struct CEC {
     conn: Arc<dyn CECConnection>,
     tx_signal: Arc<(Mutex<Option<CECCommand>>, Condvar)>,
-
-    // Internal state.
-    power_state: Arc<Mutex<bool>>,
-    input_state: Arc<Mutex<PhysicalAddress>>,
 }
 
 impl CEC {
@@ -583,14 +579,9 @@ impl CEC {
         vendor_id: u32,
     ) -> Result<Self, CECError> {
         let tx_signal = Arc::new((Mutex::new(None), Condvar::new()));
-        let power_state = Arc::new(Mutex::new(false));
-        let input_state = Arc::new(Mutex::new(0));
         let inner_tx_signal = tx_signal.clone();
         let inner_conn = conn.clone();
-        let inner_input_state = input_state.clone();
-        let inner_power_state = power_state.clone();
         let osd_name = osd_name.to_string();
-        let mut logical_to_physical = [0; 0xf];
         conn.set_rx_callback(Box::new(move |msg| {
             info!("rx {:x?} {:02x?}", msg, msg.message.payload());
             match &msg.message {
@@ -631,32 +622,6 @@ impl CEC {
                         },
                     })
                     .unwrap(),
-                CECMessage::ReportPhysicalAddress {
-                    physical_address, ..
-                } => {
-                    logical_to_physical[msg.initiator.unwrap() as usize] = *physical_address;
-                }
-                CECMessage::RoutingChange {
-                    original_address: _,
-                    new_address,
-                } => {
-                    *inner_input_state.lock().unwrap() = *new_address;
-                    *inner_power_state.lock().unwrap() = true;
-                }
-                CECMessage::SetStreamPath { physical_address } => {
-                    *inner_input_state.lock().unwrap() = *physical_address;
-                    *inner_power_state.lock().unwrap() = true;
-                }
-                CECMessage::ActiveSource { physical_address } => {
-                    *inner_input_state.lock().unwrap() = *physical_address;
-                    *inner_power_state.lock().unwrap() = true;
-                }
-                CECMessage::Standby => {
-                    *inner_power_state.lock().unwrap() = false;
-                }
-                CECMessage::ImageViewOn => {
-                    *inner_power_state.lock().unwrap() = true;
-                }
                 CECMessage::VendorCommand { vendor_data } => {
                     // See https://github.com/Pulse-Eight/libcec/blob/master/src/libcec/implementations/SLCommandHandler.cpp
                     match vendor_data[0] {
@@ -723,12 +688,7 @@ impl CEC {
             *lock.lock().unwrap() = Some(msg.clone());
             cvar.notify_all();
         }));
-        let mut cec = CEC {
-            conn,
-            tx_signal,
-            input_state: input_state,
-            power_state: power_state,
-        };
+        let mut cec = CEC { conn, tx_signal };
         // Force the tv into a well-known state
         cec.on_off(true)?;
 
@@ -818,7 +778,6 @@ impl CEC {
         Ok(())
     }
     pub fn on_off(&mut self, on: bool) -> Result<(), CECError> {
-        *self.power_state.lock().unwrap() = on;
         if on {
             self.transmit(LogicalAddress::TV, CECMessage::ImageViewOn)
         } else {
@@ -839,7 +798,6 @@ impl CEC {
         self.broadcast(CECMessage::ActiveSource {
             physical_address: new_addr,
         })?;
-        *self.input_state.lock().unwrap() = new_addr;
         Ok(())
     }
     pub fn play_pause(&mut self) -> Result<(), CECError> {
@@ -856,20 +814,6 @@ impl CEC {
             tv::Key::Home => UserControl::RootMenu,
         };
         self.press_key(code)
-    }
-
-    pub fn transmit_raw(&self, input: &[u8]) -> Result<(), CECError> {
-        let cmd = CECCommand::from_raw(input)?;
-        info!("sending {:x?}", cmd);
-        self.conn.transmit(cmd)?;
-        Ok(())
-    }
-
-    pub fn is_on(&self) -> bool {
-        *self.power_state.lock().unwrap()
-    }
-    pub fn current_input(&self) -> PhysicalAddress {
-        *self.input_state.lock().unwrap()
     }
 }
 

@@ -7,9 +7,7 @@
 
 use crate::cec::vchiq_ioctl;
 use crate::cec::vchiq_ioctl::{Element, ServiceHandle, VersionNum};
-use crate::cec::{
-    CECCommand, CECConnection, CECError, DeviceType, LogicalAddress, PhysicalAddress,
-};
+use crate::cec::{CECCommand, CECConnection, CECError, LogicalAddress, PhysicalAddress};
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
 use nix::errno::Errno;
@@ -786,11 +784,6 @@ impl HardwareInterface {
         self.send_cec_command_without_reply(&[Element::new(&CECServiceCommand::AllocLogicalAddr)])
     }
 
-    #[allow(dead_code)]
-    pub fn release_logical_address(&self) -> Result<(), ServiceError> {
-        self.send_cec_command_without_reply(&[Element::new(&CECServiceCommand::ReleaseLogicalAddr)])
-    }
-
     pub fn set_vendor_id(&self, vendor_id: u32) -> Result<(), ServiceError> {
         let id_bytes = vendor_id.to_le_bytes();
         self.send_cec_command_without_reply(&[
@@ -805,64 +798,6 @@ impl HardwareInterface {
         self.send_cec_command_without_reply(&[
             Element::new(&CECServiceCommand::SetOSDName),
             Element::new(&osd_bytes),
-        ])
-    }
-
-    #[allow(dead_code)]
-    pub fn get_vendor_id(&self, addr: LogicalAddress) -> Result<u32, ServiceError> {
-        let addr_bytes = (addr as u32).to_le_bytes();
-        let resp = self.send_cec_command_with_reply(&[
-            Element::new(&CECServiceCommand::GetVendorId),
-            Element::new(&addr_bytes),
-        ])?;
-        Ok(u32::from_le_bytes(resp[..4].try_into()?))
-    }
-
-    /// Sets and polls a particular address to find out its availability in the
-    /// CEC network.
-    ///
-    /// Only available when CEC is running in passive mode. The host can
-    /// only call this function during logical address allocation stage.
-    /// address is free if error code is VC_CEC_ERROR_NO_ACK
-    #[allow(dead_code)]
-    pub fn poll_address(&self, addr: LogicalAddress) -> Result<(), ServiceError> {
-        let addr_bytes = (addr as u32).to_le_bytes();
-        self.send_cec_command(&[
-            Element::new(&CECServiceCommand::PollAddr),
-            Element::new(&addr_bytes),
-        ])
-    }
-
-    /// Sets the logical address, device type and vendor ID to be in use.
-    ///
-    /// Only available when CEC is running in passive mode. It is the
-    /// responsibility of the host to make sure the logical address
-    /// is actually free (see vc_cec_poll_address). Physical address used
-    /// will be what is read from EDID and cannot be set.
-    #[allow(dead_code)]
-    pub fn set_logical_address(
-        &self,
-        addr: LogicalAddress,
-        device: DeviceType,
-        vendor_id: u32,
-    ) -> Result<(), ServiceError> {
-        let params = [
-            (addr as u32).to_le(),
-            (device as u32).to_le(),
-            vendor_id.to_le(),
-        ];
-        self.send_cec_command(&[
-            Element::new(&CECServiceCommand::SetLogicalAddr),
-            Element::new(&params),
-        ])
-    }
-
-    #[allow(dead_code)]
-    pub fn set_passive(&self, enabled: bool) -> Result<(), ServiceError> {
-        let param = (enabled as u32).to_le();
-        self.send_cec_command(&[
-            Element::new(&CECServiceCommand::SetLogicalAddr),
-            Element::new(&param),
         ])
     }
 }

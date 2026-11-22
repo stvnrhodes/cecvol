@@ -8,7 +8,7 @@
 
 use core::ffi::c_void;
 use core::mem::size_of;
-use nix::{ioctl_none, ioctl_readwrite, ioctl_write_ptr};
+use nix::{ioctl_readwrite, ioctl_write_ptr};
 use num_enum::TryFromPrimitive;
 use std::ptr;
 
@@ -27,21 +27,13 @@ macro_rules! ioctl_none_write_int {
 
 const VCHIQ_IOC_MAGIC: u8 = 0xc4;
 ioctl_none_write_int!(connect, VCHIQ_IOC_MAGIC, 0);
-ioctl_none!(shutdown, VCHIQ_IOC_MAGIC, 1);
 ioctl_readwrite!(create_service, VCHIQ_IOC_MAGIC, 2, CreateService);
-ioctl_none!(remove_service, VCHIQ_IOC_MAGIC, 3);
 ioctl_write_ptr!(queue_message, VCHIQ_IOC_MAGIC, 4, QueueMessage);
-ioctl_readwrite!(queue_bulk_transmit, VCHIQ_IOC_MAGIC, 5, QueueBulkTransfer);
-ioctl_readwrite!(queue_bulk_receive, VCHIQ_IOC_MAGIC, 6, QueueBulkTransfer);
 ioctl_readwrite!(await_completion, VCHIQ_IOC_MAGIC, 7, AwaitCompletion);
 ioctl_readwrite!(dequeue_message, VCHIQ_IOC_MAGIC, 8, DequeueMessage);
-ioctl_none!(get_client_id, VCHIQ_IOC_MAGIC, 9);
 ioctl_readwrite!(get_config, VCHIQ_IOC_MAGIC, 10, GetConfig);
-ioctl_none!(close_service, VCHIQ_IOC_MAGIC, 11);
 ioctl_none_write_int!(use_service, VCHIQ_IOC_MAGIC, 12);
 ioctl_none_write_int!(release_service, VCHIQ_IOC_MAGIC, 13);
-ioctl_write_ptr!(set_service_option, VCHIQ_IOC_MAGIC, 14, SetServiceOption);
-ioctl_write_ptr!(dump_phys_mem, VCHIQ_IOC_MAGIC, 15, DumpPhysMem);
 ioctl_none_write_int!(lib_version, VCHIQ_IOC_MAGIC, 16);
 ioctl_none_write_int!(close_delivered, VCHIQ_IOC_MAGIC, 17);
 
@@ -68,24 +60,6 @@ pub enum Reason {
     BulkReceiveDone,     // service, -, bulk_userdata
     BulkTransmitAborted, // service, -, bulk_userdata
     BulkReceiveAborted,  // service, -, bulk_userdata
-}
-
-#[repr(u8)]
-#[allow(dead_code)]
-pub enum BulkMode {
-    Callback,
-    Blocking,
-    Nocallback,
-}
-
-#[repr(u8)]
-#[allow(dead_code)]
-pub enum ServiceOption {
-    Autoclose,
-    SlotQuota,
-    MessageQuota,
-    Synchronous,
-    Trace,
 }
 
 #[repr(C)]
@@ -148,16 +122,6 @@ impl QueueMessage {
 }
 
 #[repr(C)]
-#[allow(dead_code)]
-pub struct QueueBulkTransfer {
-    pub handle: ServiceHandle,
-    pub data: *mut c_void,
-    pub size: u32,
-    pub userdata: *mut c_void,
-    pub mode: BulkMode,
-}
-
-#[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct CompletionData {
     pub reason: Reason,
@@ -209,19 +173,4 @@ pub struct Config {
 pub struct GetConfig {
     pub config_size: usize,
     pub pconfig: *mut Config,
-}
-
-#[repr(C)]
-#[allow(dead_code)]
-pub struct SetServiceOption {
-    pub handle: ServiceHandle,
-    pub option: ServiceOption,
-    pub value: i32,
-}
-
-#[repr(C)]
-#[allow(dead_code)]
-pub struct DumpPhysMem {
-    pub virt_addr: *mut c_void,
-    pub num_bytes: u32,
 }
