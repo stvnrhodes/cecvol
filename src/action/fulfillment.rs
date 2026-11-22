@@ -61,6 +61,7 @@ impl FulfillmentHandler {
             match input {
                 RequestPayload::Sync => {
                     info!("SYNC req={} user={}", request_id, agent_user_id);
+                    let command_only = !self.cec.lock().unwrap().supports_state_query();
                     return serde_json::to_value(&FulfillmentResponse {
                         request_id,
                         payload: json!({
@@ -87,14 +88,14 @@ impl FulfillmentHandler {
                                         "availableInputs": available_inputs(),
                                         "commandOnlyInputSelector": true,
                                         "orderedInputs": false,
-                                        "commandOnlyOnOff": true,
+                                        "commandOnlyOnOff": command_only,
                                         "queryOnlyOnOff": false,
                                         "transportControlSupportedCommands": ["PAUSE", "RESUME"],
                                         "volumeMaxLevel": 100,
                                         "volumeCanMuteAndUnmute": true,
                                         "volumeDefaultPercentage": 15,
                                         "levelStepSize": self.volume_step_size,
-                                        "commandOnlyVolume": true
+                                        "commandOnlyVolume": command_only
                                     }
                                 }
                             ]
@@ -106,29 +107,42 @@ impl FulfillmentHandler {
                     let ids: Vec<&str> = devices.iter().map(|d| d.id.as_str()).collect();
                     info!("QUERY req={} devices={:?}", request_id, ids);
                     let mut device_map = Map::new();
-                    let (is_on, current_volume) = if devices.iter().any(|d| d.id == DEVICE_ID) {
+                    let queried_state = if devices.iter().any(|d| d.id == DEVICE_ID) {
                         let mut cec = self.cec.lock().unwrap();
-                        match cec.get_volume() {
-                            Ok(Some(vol)) => (Some(true), Some(vol)),
-                            Ok(None) => (None, None),
-                            Err(e) => {
-                                error!("Failed to query volume: {}", e);
-                                (Some(false), None)
+                        if cec.supports_state_query() {
+                            match cec.get_volume() {
+                                Ok(Some(vol)) => {
+                                    let is_muted = match cec.get_mute() {
+                                        Ok(Some(m)) => m,
+                                        Ok(None) => false,
+                                        Err(e) => {
+                                            error!("Failed to query mute state: {}", e);
+                                            false
+                                        }
+                                    };
+                                    Some((true, vol, is_muted))
+                                }
+                                Ok(None) => None,
+                                Err(e) => {
+                                    error!("Failed to query volume: {}", e);
+                                    Some((false, 0, false))
+                                }
                             }
+                        } else {
+                            None
                         }
                     } else {
-                        (None, None)
+                        None
                     };
                     for d in devices {
                         if d.id == DEVICE_ID {
                             let mut state = Map::new();
                             state.insert("online".to_string(), json!(true));
                             state.insert("status".to_string(), json!("SUCCESS"));
-                            if let Some(on) = is_on {
+                            if let Some((on, vol, is_muted)) = queried_state {
                                 state.insert("on".to_string(), json!(on));
-                            }
-                            if let Some(vol) = current_volume {
                                 state.insert("currentVolume".to_string(), json!(vol));
+                                state.insert("isMuted".to_string(), json!(is_muted));
                             }
                             device_map.insert(d.id.clone(), Value::Object(state));
                         } else {
@@ -152,11 +166,14 @@ impl FulfillmentHandler {
                 }
                 RequestPayload::Execute { commands } => {
                     let mut cec = self.cec.lock().unwrap();
+                    let supports_state = cec.supports_state_query();
                     let mut results = Vec::new();
 
                     for c in commands {
                         let ids: Vec<String> = c.devices.iter().map(|d| d.id.clone()).collect();
                         let mut error_code: Option<&'static str> = None;
+                        let mut states = Map::new();
+                        states.insert("online".to_string(), json!(true));
 
                         for e in &c.execution {
                             info!("EXECUTE req={} devices={:?} {:?}", request_id, ids, e);
@@ -166,25 +183,75 @@ impl FulfillmentHandler {
                                         -MAX_RELATIVE_VOLUME_STEPS,
                                         MAX_RELATIVE_VOLUME_STEPS,
                                     );
-                                    cec.volume_change(steps).map_err(|err| {
-                                        error!("Failed to change volume: {}", err);
-                                        map_tv_error(&err)
-                                    })
+                                    cec.volume_change(steps)
+                                        .map(|()| {
+                                            if supports_state {
+                                                states.insert("on".to_string(), json!(true));
+                                                if let Ok(Some(vol)) = cec.get_volume() {
+                                                    states.insert(
+                                                        "currentVolume".to_string(),
+                                                        json!(vol),
+                                                    );
+                                                }
+                                                let muted =
+                                                    cec.get_mute().ok().flatten().unwrap_or(false);
+                                                states.insert("isMuted".to_string(), json!(muted));
+                                            }
+                                        })
+                                        .map_err(|err| {
+                                            error!("Failed to change volume: {}", err);
+                                            map_tv_error(&err)
+                                        })
                                 }
                                 Execution::SetVolume { volume_level } => {
-                                    cec.set_volume(*volume_level).map_err(|err| {
-                                        error!("Failed to set volume: {}", err);
-                                        map_tv_error(&err)
-                                    })
+                                    let clamped = (*volume_level).clamp(0, 100);
+                                    cec.set_volume(clamped)
+                                        .map(|()| {
+                                            if supports_state {
+                                                states.insert("on".to_string(), json!(true));
+                                                states.insert(
+                                                    "currentVolume".to_string(),
+                                                    json!(clamped),
+                                                );
+                                                let muted =
+                                                    cec.get_mute().ok().flatten().unwrap_or(false);
+                                                states.insert("isMuted".to_string(), json!(muted));
+                                            }
+                                        })
+                                        .map_err(|err| {
+                                            error!("Failed to set volume: {}", err);
+                                            map_tv_error(&err)
+                                        })
                                 }
-                                Execution::Mute { mute } => cec.mute(*mute).map_err(|err| {
-                                    error!("Failed to mute: {}", err);
-                                    map_tv_error(&err)
-                                }),
-                                Execution::OnOff { on } => cec.on_off(*on).map_err(|err| {
-                                    error!("Failed to turn on/off: {}", err);
-                                    map_tv_error(&err)
-                                }),
+                                Execution::Mute { mute } => cec
+                                    .mute(*mute)
+                                    .map(|()| {
+                                        if supports_state {
+                                            states.insert("on".to_string(), json!(true));
+                                            states.insert("isMuted".to_string(), json!(*mute));
+                                            if let Ok(Some(vol)) = cec.get_volume() {
+                                                states.insert(
+                                                    "currentVolume".to_string(),
+                                                    json!(vol),
+                                                );
+                                            }
+                                        }
+                                    })
+                                    .map_err(|err| {
+                                        error!("Failed to mute: {}", err);
+                                        map_tv_error(&err)
+                                    }),
+                                Execution::OnOff { on } => cec
+                                    .on_off(*on)
+                                    .map(|()| {
+                                        if supports_state {
+                                            states.insert("on".to_string(), json!(*on));
+                                        }
+                                    })
+                                    .map_err(|err| {
+                                        error!("Failed to turn on/off: {}", err);
+                                        map_tv_error(&err)
+                                    }),
                                 Execution::WakeOnLan {} => {
                                     wol::wake(self.server_mac_addr).map_err(|err| {
                                         error!("Failed to wake on lan: {}", err);
@@ -241,7 +308,8 @@ impl FulfillmentHandler {
                         match error_code {
                             None => results.push(json!({
                                 "ids": ids,
-                                "status": "SUCCESS"
+                                "status": "SUCCESS",
+                                "states": states
                             })),
                             Some(code) => results.push(json!({
                                 "ids": ids,
@@ -285,9 +353,14 @@ mod tests {
     struct MockTV {
         calls: Arc<Mutex<Vec<String>>>,
         fail_next: bool,
+        stateful: bool,
+        muted: bool,
     }
 
     impl TVConnection for MockTV {
+        fn supports_state_query(&self) -> bool {
+            self.stateful
+        }
         fn on_off(&mut self, on: bool) -> Result<(), TVError> {
             if self.fail_next {
                 return Err(TVError::Other(Box::new(std::io::Error::new(
@@ -313,6 +386,9 @@ mod tests {
             Ok(())
         }
         fn get_volume(&mut self) -> Result<Option<i32>, TVError> {
+            if !self.stateful {
+                return Ok(None);
+            }
             if self.fail_next {
                 return Err(TVError::Other(Box::new(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
@@ -322,8 +398,21 @@ mod tests {
             Ok(Some(19))
         }
         fn mute(&mut self, mute: bool) -> Result<(), TVError> {
+            self.muted = mute;
             self.calls.lock().unwrap().push(format!("mute({})", mute));
             Ok(())
+        }
+        fn get_mute(&mut self) -> Result<Option<bool>, TVError> {
+            if !self.stateful {
+                return Ok(None);
+            }
+            if self.fail_next {
+                return Err(TVError::Other(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "tv offline",
+                ))));
+            }
+            Ok(Some(self.muted))
         }
         fn set_input(&mut self, input: tv::Input) -> Result<(), TVError> {
             let name = match input {
@@ -348,11 +437,16 @@ mod tests {
         }
     }
 
-    fn make_handler(fail_next: bool) -> (FulfillmentHandler, Arc<Mutex<Vec<String>>>) {
+    fn make_handler_with(
+        fail_next: bool,
+        stateful: bool,
+    ) -> (FulfillmentHandler, Arc<Mutex<Vec<String>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mock = MockTV {
             calls: calls.clone(),
             fail_next,
+            stateful,
+            muted: false,
         };
         let handler = FulfillmentHandler {
             server_mac_addr: [0; 6],
@@ -360,6 +454,10 @@ mod tests {
             volume_step_size: 3,
         };
         (handler, calls)
+    }
+
+    fn make_handler(fail_next: bool) -> (FulfillmentHandler, Arc<Mutex<Vec<String>>>) {
+        make_handler_with(fail_next, true)
     }
 
     #[test]
@@ -379,11 +477,43 @@ mod tests {
         assert_eq!(dev["type"], "action.devices.types.TV");
         assert_eq!(dev["name"], json!({ "name": "cecvol" }));
         assert!(dev.get("roomHint").is_none());
+        assert_eq!(dev["attributes"]["commandOnlyOnOff"], false);
+        assert_eq!(dev["attributes"]["commandOnlyVolume"], false);
         assert_eq!(
             dev["attributes"]["transportControlSupportedCommands"],
             json!(["PAUSE", "RESUME"])
         );
         assert_eq!(dev["attributes"]["levelStepSize"], 3);
+    }
+
+    #[test]
+    fn test_sync_and_query_command_only_backend() {
+        let (handler, _) = make_handler_with(false, false);
+        let sync_req: FulfillmentRequest = serde_json::from_value(json!({
+            "requestId": "req-sync-cmd",
+            "inputs": [{ "intent": "action.devices.SYNC" }]
+        }))
+        .unwrap();
+        let sync_resp = handler.handle(&sync_req, "user@example.com");
+        let dev = &sync_resp["payload"]["devices"][0];
+        assert_eq!(dev["attributes"]["commandOnlyOnOff"], true);
+        assert_eq!(dev["attributes"]["commandOnlyVolume"], true);
+
+        let query_req: FulfillmentRequest = serde_json::from_value(json!({
+            "requestId": "req-query-cmd",
+            "inputs": [{
+                "intent": "action.devices.QUERY",
+                "payload": { "devices": [{ "id": "1" }] }
+            }]
+        }))
+        .unwrap();
+        let query_resp = handler.handle(&query_req, "user@example.com");
+        let state = &query_resp["payload"]["devices"]["1"];
+        assert_eq!(state["online"], true);
+        assert_eq!(state["status"], "SUCCESS");
+        assert!(state.get("on").is_none());
+        assert!(state.get("currentVolume").is_none());
+        assert!(state.get("isMuted").is_none());
     }
 
     #[test]
@@ -405,6 +535,7 @@ mod tests {
         assert_eq!(resp["payload"]["devices"]["1"]["status"], "SUCCESS");
         assert_eq!(resp["payload"]["devices"]["1"]["on"], true);
         assert_eq!(resp["payload"]["devices"]["1"]["currentVolume"], 19);
+        assert_eq!(resp["payload"]["devices"]["1"]["isMuted"], false);
         assert_eq!(resp["payload"]["devices"]["999"]["online"], false);
         assert_eq!(
             resp["payload"]["devices"]["999"]["errorCode"],
@@ -430,7 +561,8 @@ mod tests {
         assert_eq!(resp["payload"]["devices"]["1"]["online"], true);
         assert_eq!(resp["payload"]["devices"]["1"]["status"], "SUCCESS");
         assert_eq!(resp["payload"]["devices"]["1"]["on"], false);
-        assert!(resp["payload"]["devices"]["1"].get("currentVolume").is_none());
+        assert_eq!(resp["payload"]["devices"]["1"]["currentVolume"], 0);
+        assert_eq!(resp["payload"]["devices"]["1"]["isMuted"], false);
     }
 
     #[test]
@@ -476,7 +608,20 @@ mod tests {
 
         let resp = handler.handle(&req, "user@example.com");
         assert_eq!(resp["payload"]["commands"][0]["status"], "SUCCESS");
+        assert_eq!(
+            resp["payload"]["commands"][0]["states"],
+            json!({
+                "online": true,
+                "on": true,
+                "currentVolume": 20,
+                "isMuted": false
+            })
+        );
         assert_eq!(resp["payload"]["commands"][1]["status"], "SUCCESS");
+        assert_eq!(
+            resp["payload"]["commands"][1]["states"],
+            json!({ "online": true })
+        );
         assert_eq!(
             *calls.lock().unwrap(),
             vec![

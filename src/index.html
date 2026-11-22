@@ -150,6 +150,11 @@
             touch-action: manipulation;
         }
 
+        .remote .mdc-button.muted {
+            background-color: #d32f2f;
+            color: #fff;
+        }
+
         .remote .dpad .mdc-button {
             height: clamp(54px, 9dvh, 78px);
         }
@@ -203,6 +208,10 @@
                 .then(data => {
                     console.log(data);
                     document.getElementById("status").style.visibility = "hidden";
+                    const cmdResult = data && data.payload && data.payload.commands && data.payload.commands[0];
+                    if (cmdResult && cmdResult.status === 'SUCCESS' && cmdResult.states) {
+                        applyDeviceState(cmdResult.states);
+                    }
                     return data;
                 })
                 .catch(e => {
@@ -210,6 +219,31 @@
                     document.getElementById("status").textContent = e;
                     document.getElementById("status").style.visibility = "visible";
                 });
+        }
+        let currentMuted = false;
+        function updateMuteUI(muted) {
+            currentMuted = Boolean(muted);
+            const btn = document.getElementById('mute-btn');
+            if (!btn) return;
+            btn.classList.toggle('muted', currentMuted);
+            btn.setAttribute('aria-pressed', currentMuted ? 'true' : 'false');
+        }
+        function applyDeviceState(dev) {
+            if (!dev) return;
+            if (typeof dev.on === 'boolean') {
+                updatePowerUI(dev.on);
+            }
+            if (dev.on === false) {
+                updateVolumeUI(null);
+                updateMuteUI(false);
+            } else {
+                if (typeof dev.currentVolume === 'number') {
+                    updateVolumeUI(dev.currentVolume);
+                }
+                if (typeof dev.isMuted === 'boolean') {
+                    updateMuteUI(dev.isMuted);
+                }
+            }
         }
         function updatePowerUI(on) {
             const badge = document.getElementById('power-status');
@@ -279,15 +313,7 @@
             })
                 .then(data => {
                     const dev = data && data.payload && data.payload.devices && data.payload.devices['1'];
-                    if (!dev) return;
-                    if (typeof dev.on === 'boolean') {
-                        updatePowerUI(dev.on);
-                    }
-                    if (typeof dev.currentVolume === 'number') {
-                        updateVolumeUI(dev.currentVolume);
-                    } else if (dev.on === false) {
-                        updateVolumeUI(null);
-                    }
+                    applyDeviceState(dev);
                 })
                 .catch(e => {
                     console.log(e);
@@ -299,7 +325,7 @@
                 'params': {
                     'relativeSteps': level
                 }
-            }).then(() => refreshState());
+            });
         }
         function setVolume(level) {
             const vol = parseInt(level, 10);
@@ -311,13 +337,13 @@
                 }
             });
         }
-        function mute(mute) {
+        function toggleMute() {
             executeCommand({
                 'command': 'action.devices.commands.mute',
                 'params': {
-                    'mute': mute
+                    'mute': !currentMuted
                 }
-            })
+            });
         }
         function wol() {
             executeCommand({
@@ -423,7 +449,7 @@
             </button>
         </div>
         <div class="volume">
-            <button class="mdc-button mdc-button--raised" onclick="mute(true)">
+            <button id="mute-btn" class="mdc-button mdc-button--raised" onclick="toggleMute()" aria-label="Mute" aria-pressed="false">
                 <span class="mdc-button__ripple"></span>
                 <i class="material-icons">volume_off</i>
             </button>

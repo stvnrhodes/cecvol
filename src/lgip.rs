@@ -232,7 +232,21 @@ fn parse_volume(resp: &str) -> io::Result<i32> {
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
+fn parse_mute(resp: &str) -> io::Result<bool> {
+    match resp.trim().strip_prefix("MUTE:") {
+        Some(v) if v.eq_ignore_ascii_case("on") => Ok(true),
+        Some(v) if v.eq_ignore_ascii_case("off") => Ok(false),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("unexpected mute response: {resp}"),
+        )),
+    }
+}
+
 impl tv::TVConnection for LGTV {
+    fn supports_state_query(&self) -> bool {
+        true
+    }
     fn on_off(&mut self, on: bool) -> Result<(), TVError> {
         if on {
             wol::wake(self.mac_address)?;
@@ -278,6 +292,10 @@ impl tv::TVConnection for LGTV {
         let cmd = format!("VOLUME_MUTE {m}\r");
         self.send_command(&cmd)?;
         Ok(())
+    }
+    fn get_mute(&mut self) -> Result<Option<bool>, TVError> {
+        let resp = self.send_command("MUTE_STATE\r")?;
+        Ok(Some(parse_mute(&resp)?))
     }
     fn set_input(&mut self, input: tv::Input) -> Result<(), TVError> {
         let input = match input {
@@ -366,6 +384,14 @@ mod tests {
         assert_eq!(parse_volume("VOL:19").unwrap(), 19);
         assert_eq!(parse_volume("VOL:0\r\n").unwrap(), 0);
         assert!(parse_volume("OK").is_err());
+    }
+
+    #[test]
+    fn test_parse_mute() {
+        assert!(parse_mute("MUTE:on").unwrap());
+        assert!(!parse_mute("MUTE:off\r\n").unwrap());
+        assert!(parse_mute("MUTE:ON").unwrap());
+        assert!(parse_mute("OK").is_err());
     }
 
     #[test]

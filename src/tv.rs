@@ -41,11 +41,17 @@ pub enum Key {
 }
 
 pub trait TVConnection {
+    fn supports_state_query(&self) -> bool {
+        false
+    }
     fn on_off(&mut self, on: bool) -> Result<(), TVError>;
     fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError>;
     fn set_volume(&mut self, level: i32) -> Result<(), TVError>;
     fn get_volume(&mut self) -> Result<Option<i32>, TVError>;
     fn mute(&mut self, mute: bool) -> Result<(), TVError>;
+    fn get_mute(&mut self) -> Result<Option<bool>, TVError> {
+        Ok(None)
+    }
     fn set_input(&mut self, input: Input) -> Result<(), TVError>;
     fn play_pause(&mut self) -> Result<(), TVError>;
     fn send_key(&mut self, key: Key) -> Result<(), TVError>;
