@@ -30,10 +30,61 @@
             align-items: center;
         }
 
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            margin: 8px 0 16px;
+        }
+
         h1 {
             text-align: center;
-            margin: 8px 0 16px;
+            margin: 0;
             font-size: clamp(1.5rem, 3.5dvh, 2rem);
+        }
+
+        .power-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid #d0d0d0;
+            background: #f5f5f5;
+            color: #555;
+            font-family: Roboto, sans-serif;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .power-badge .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #9e9e9e;
+        }
+
+        .power-badge.on {
+            background: #e8f5e9;
+            border-color: #a5d6a7;
+            color: #1b5e20;
+        }
+
+        .power-badge.on .dot {
+            background: #2e7d32;
+        }
+
+        .power-badge.off {
+            background: #f5f5f5;
+            border-color: #d0d0d0;
+            color: #616161;
+        }
+
+        .power-badge.off .dot {
+            background: #9e9e9e;
         }
 
         .remote {
@@ -150,6 +201,20 @@
                     document.getElementById("status").style.visibility = "visible";
                 });
         }
+        function updatePowerUI(on) {
+            const badge = document.getElementById('power-status');
+            const label = document.getElementById('power-label');
+            badge.classList.remove('on', 'off');
+            if (on === true) {
+                badge.classList.add('on');
+                label.textContent = 'On';
+            } else if (on === false) {
+                badge.classList.add('off');
+                label.textContent = 'Off';
+            } else {
+                label.textContent = '...';
+            }
+        }
         function updateVolumeUI(level) {
             const slider = document.getElementById('volume-slider');
             const label = document.getElementById('volume-value');
@@ -160,7 +225,14 @@
                 label.textContent = '--';
             }
         }
-        function refreshVolume() {
+        let pendingPowerRefreshes = [];
+        function clearPendingPowerRefreshes() {
+            for (const id of pendingPowerRefreshes) {
+                clearTimeout(id);
+            }
+            pendingPowerRefreshes = [];
+        }
+        function refreshState() {
             fetch('/fulfillment', {
                 method: 'POST',
                 mode: 'same-origin',
@@ -182,8 +254,14 @@
                 .then(response => response.json())
                 .then(data => {
                     const dev = data && data.payload && data.payload.devices && data.payload.devices['1'];
-                    if (dev && typeof dev.currentVolume === 'number') {
+                    if (!dev) return;
+                    if (typeof dev.on === 'boolean') {
+                        updatePowerUI(dev.on);
+                    }
+                    if (typeof dev.currentVolume === 'number') {
                         updateVolumeUI(dev.currentVolume);
+                    } else if (dev.on === false) {
+                        updateVolumeUI(null);
                     }
                 })
                 .catch(e => {
@@ -196,7 +274,7 @@
                 'params': {
                     'relativeSteps': level
                 }
-            }).then(() => refreshVolume());
+            }).then(() => refreshState());
         }
         function setVolume(level) {
             const vol = parseInt(level, 10);
@@ -231,12 +309,16 @@
             })
         }
         function onOff(on) {
+            clearPendingPowerRefreshes();
             executeCommand({
                 'command': 'action.devices.commands.OnOff',
                 'params': {
                     'on': on
                 }
-            })
+            }).then(() => {
+                const delays = on ? [2500, 6000] : [1500, 4000];
+                pendingPowerRefreshes = delays.map(ms => setTimeout(refreshState, ms));
+            });
         }
         function sendKey(key) {
             executeCommand({
@@ -255,17 +337,23 @@
                 sendVol(-1) // down key
             }
         }
-        window.addEventListener('DOMContentLoaded', refreshVolume);
+        window.addEventListener('DOMContentLoaded', refreshState);
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
-                refreshVolume();
+                refreshState();
             }
         });
     </script>
 </head>
 
 <body>
-    <h1>TV Control</h1>
+    <div class="header">
+        <h1>TV Control</h1>
+        <button id="power-status" class="power-badge" type="button" onclick="refreshState()" title="Click to refresh TV status">
+            <span class="dot"></span>
+            <span id="power-label">...</span>
+        </button>
+    </div>
     <div class="remote">
         <div class="dpad">
             <button class="mdc-button mdc-button--raised" onclick="onOff(false)">

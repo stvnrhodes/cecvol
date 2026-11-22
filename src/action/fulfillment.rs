@@ -103,23 +103,27 @@ impl FulfillmentHandler {
                 }
                 RequestPayload::Query { devices } => {
                     let mut device_map = Map::new();
-                    let current_volume = if devices.iter().any(|d| d.id == DEVICE_ID) {
+                    let (is_on, current_volume) = if devices.iter().any(|d| d.id == DEVICE_ID) {
                         let mut cec = self.cec.lock().unwrap();
                         match cec.get_volume() {
-                            Ok(vol) => vol,
+                            Ok(Some(vol)) => (Some(true), Some(vol)),
+                            Ok(None) => (None, None),
                             Err(e) => {
                                 error!("Failed to query volume: {}", e);
-                                None
+                                (Some(false), None)
                             }
                         }
                     } else {
-                        None
+                        (None, None)
                     };
                     for d in devices {
                         if d.id == DEVICE_ID {
                             let mut state = Map::new();
                             state.insert("online".to_string(), json!(true));
                             state.insert("status".to_string(), json!("SUCCESS"));
+                            if let Some(on) = is_on {
+                                state.insert("on".to_string(), json!(on));
+                            }
                             if let Some(vol) = current_volume {
                                 state.insert("currentVolume".to_string(), json!(vol));
                             }
@@ -304,6 +308,12 @@ mod tests {
             Ok(())
         }
         fn get_volume(&mut self) -> Result<Option<i32>, TVError> {
+            if self.fail_next {
+                return Err(TVError::Other(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "tv offline",
+                ))));
+            }
             Ok(Some(19))
         }
         fn mute(&mut self, mute: bool) -> Result<(), TVError> {
@@ -388,12 +398,34 @@ mod tests {
         let resp = handler.handle(&req, "user@example.com");
         assert_eq!(resp["payload"]["devices"]["1"]["online"], true);
         assert_eq!(resp["payload"]["devices"]["1"]["status"], "SUCCESS");
+        assert_eq!(resp["payload"]["devices"]["1"]["on"], true);
         assert_eq!(resp["payload"]["devices"]["1"]["currentVolume"], 19);
         assert_eq!(resp["payload"]["devices"]["999"]["online"], false);
         assert_eq!(
             resp["payload"]["devices"]["999"]["errorCode"],
             "deviceNotFound"
         );
+    }
+
+    #[test]
+    fn test_query_response_when_tv_off() {
+        let (handler, _) = make_handler(true);
+        let req: FulfillmentRequest = serde_json::from_value(json!({
+            "requestId": "req-query-off",
+            "inputs": [{
+                "intent": "action.devices.QUERY",
+                "payload": {
+                    "devices": [{ "id": "1" }]
+                }
+            }]
+        }))
+        .unwrap();
+
+        let resp = handler.handle(&req, "user@example.com");
+        assert_eq!(resp["payload"]["devices"]["1"]["online"], true);
+        assert_eq!(resp["payload"]["devices"]["1"]["status"], "SUCCESS");
+        assert_eq!(resp["payload"]["devices"]["1"]["on"], false);
+        assert!(resp["payload"]["devices"]["1"].get("currentVolume").is_none());
     }
 
     #[test]

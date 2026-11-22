@@ -8,14 +8,19 @@ use pbkdf2::pbkdf2_hmac;
 use rand::RngCore;
 use sha2;
 use std::convert::TryInto;
-use std::io;
-use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::io::{self, BufRead, BufReader, Read, Write};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 // Protocol logic is ported from https://github.com/WesSouza/lgtv-ip-control
 
 const LG_CONTROL_PORT: u16 = 9761;
+#[cfg(unix)]
+const AVAHI_SOCKET_PATH: &str = "/run/avahi-daemon/socket";
+#[cfg(unix)]
+const AVAHI_TIMEOUT: Duration = Duration::from_millis(500);
 const ENCRYPTION_KEY_SALT: &[u8] = &[
     99, 97, 184, 14, 155, 220, 166, 99, 141, 7, 32, 242, 204, 86, 143, 185,
 ];
@@ -124,15 +129,7 @@ impl LGTV {
         Ok(plaintext.to_string())
     }
     pub fn send_command(&self, cmd: &str) -> io::Result<String> {
-        let addr = (self.addr.as_str(), LG_CONTROL_PORT)
-            .to_socket_addrs()?
-            .next()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::AddrNotAvailable,
-                    format!("could not resolve TV address: {}", self.addr),
-                )
-            })?;
+        let addr = resolve_tv_addr(&self.addr, LG_CONTROL_PORT)?;
         let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))?;
         stream.set_read_timeout(Some(Duration::from_millis(500)))?;
         stream.set_write_timeout(Some(Duration::from_millis(500)))?;
@@ -146,6 +143,81 @@ impl LGTV {
         info!("{}", decrypted);
         Ok(decrypted)
     }
+}
+
+fn parse_avahi_response(line: &str) -> io::Result<IpAddr> {
+    let trimmed = line.trim();
+    if let Some(rest) = trimmed.strip_prefix('+') {
+        let ip_str = rest.split_whitespace().nth(3).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("unexpected avahi response: {trimmed}"),
+            )
+        })?;
+        return ip_str
+            .parse::<IpAddr>()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
+    }
+    Err(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("avahi lookup failed: {trimmed}"),
+    ))
+}
+
+/// Resolve a `.local` hostname directly via Avahi's simple protocol socket, bypassing
+/// glibc/nscd so mDNS timeouts while the TV is asleep cannot poison process-wide NSS.
+/// Returns `Ok(None)` if the Avahi socket is not present on this host.
+#[cfg(unix)]
+fn try_resolve_avahi(host: &str) -> io::Result<Option<IpAddr>> {
+    if !host.to_ascii_lowercase().ends_with(".local")
+        || host.bytes().any(|b| b.is_ascii_whitespace())
+    {
+        return Ok(None);
+    }
+
+    let mut stream = match UnixStream::connect(AVAHI_SOCKET_PATH) {
+        Ok(s) => s,
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    };
+
+    stream.set_read_timeout(Some(AVAHI_TIMEOUT))?;
+    stream.set_write_timeout(Some(AVAHI_TIMEOUT))?;
+    writeln!(stream, "RESOLVE-HOSTNAME-IPV4 {host}")?;
+
+    let mut line = String::new();
+    let n = BufReader::new(stream).read_line(&mut line)?;
+    if n == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "avahi closed connection without responding",
+        ));
+    }
+    parse_avahi_response(&line).map(Some)
+}
+
+#[cfg(not(unix))]
+fn try_resolve_avahi(_host: &str) -> io::Result<Option<IpAddr>> {
+    Ok(None)
+}
+
+fn resolve_tv_addr(host: &str, port: u16) -> io::Result<SocketAddr> {
+    if let Some(ip) = try_resolve_avahi(host)? {
+        return Ok(SocketAddr::new(ip, port));
+    }
+    (host, port).to_socket_addrs()?.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::AddrNotAvailable,
+            format!("could not resolve TV address: {host}"),
+        )
+    })
 }
 
 fn parse_volume(resp: &str) -> io::Result<i32> {
@@ -293,5 +365,15 @@ mod tests {
         assert_eq!(parse_volume("VOL:19").unwrap(), 19);
         assert_eq!(parse_volume("VOL:0\r\n").unwrap(), 0);
         assert!(parse_volume("OK").is_err());
+    }
+
+    #[test]
+    fn test_parse_avahi_response() {
+        assert_eq!(
+            parse_avahi_response("+ 2 0 LGwebOSTV.local 192.168.0.128\n").unwrap(),
+            "192.168.0.128".parse::<IpAddr>().unwrap()
+        );
+        assert!(parse_avahi_response("-15 Timeout reached\n").is_err());
+        assert!(parse_avahi_response("+ 2 0 LGwebOSTV.local\n").is_err());
     }
 }
