@@ -128,20 +128,74 @@ impl LGTV {
         let plaintext = std::str::from_utf8(&decrypted[..end])?;
         Ok(plaintext.to_string())
     }
-    pub fn send_command(&self, cmd: &str) -> io::Result<String> {
-        let addr = resolve_tv_addr(&self.addr, LG_CONTROL_PORT)?;
+    fn send_command_to(
+        &self,
+        addr: SocketAddr,
+        cmd: &str,
+        allow_no_reply: bool,
+    ) -> io::Result<String> {
         let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))?;
-        stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+        let read_timeout = if allow_no_reply {
+            Duration::from_millis(150)
+        } else {
+            Duration::from_millis(500)
+        };
+        stream.set_read_timeout(Some(read_timeout))?;
         stream.set_write_timeout(Some(Duration::from_millis(500)))?;
         let payload = self.encrypt(cmd);
         stream.write_all(&payload)?;
         let mut resp = [0; 512];
-        let len = stream.read(&mut resp)?;
+        let len = match stream.read(&mut resp) {
+            Ok(0) if allow_no_reply => return Ok(String::new()),
+            Ok(n) => n,
+            Err(e)
+                if allow_no_reply
+                    && matches!(
+                        e.kind(),
+                        io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                            | io::ErrorKind::ConnectionReset
+                            | io::ErrorKind::UnexpectedEof
+                    ) =>
+            {
+                return Ok(String::new());
+            }
+            Err(e) => return Err(e),
+        };
         let decrypted = self
             .decrypt(&resp[..len])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         info!("{}", decrypted);
         Ok(decrypted)
+    }
+    pub fn send_command(&self, cmd: &str) -> io::Result<String> {
+        let addr = resolve_tv_addr(&self.addr, LG_CONTROL_PORT)?;
+        self.send_command_to(addr, cmd, false)
+    }
+    fn send_power_off(&self) -> io::Result<()> {
+        let addr = match resolve_tv_addr(&self.addr, LG_CONTROL_PORT) {
+            Ok(a) => a,
+            Err(e) => {
+                info!("TV unreachable during power off (already off?): {e}");
+                return Ok(());
+            }
+        };
+        match self.send_command_to(addr, "POWER off\r", true) {
+            Ok(_) => Ok(()),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::TimedOut
+                        | io::ErrorKind::ConnectionRefused
+                        | io::ErrorKind::HostUnreachable
+                        | io::ErrorKind::NetworkUnreachable
+                ) =>
+            {
+                info!("TV unreachable during power off (already off?): {e}");
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -251,7 +305,7 @@ impl tv::TVConnection for LGTV {
         if on {
             wol::wake(self.mac_address)?;
         } else {
-            self.send_command("POWER off\r")?;
+            self.send_power_off()?;
         }
         Ok(())
     }
@@ -402,5 +456,35 @@ mod tests {
         );
         assert!(parse_avahi_response("-15 Timeout reached\n").is_err());
         assert!(parse_avahi_response("+ 2 0 LGwebOSTV.local\n").is_err());
+    }
+
+    #[test]
+    fn test_send_command_allow_no_reply_handles_close_and_timeout() {
+        use std::net::TcpListener;
+
+        let tv = LGTV::new("127.0.0.1".to_string(), [0; 6], "0J8FOLOW");
+
+        // Case 1: TV closes socket immediately after receiving POWER off.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 256];
+            let _ = sock.read(&mut buf);
+        });
+        assert_eq!(tv.send_command_to(addr, "POWER off\r", true).unwrap(), "");
+        handle.join().unwrap();
+
+        // Case 2: TV stalls without sending a reply before read timeout.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            let (mut sock, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 256];
+            let _ = sock.read(&mut buf);
+            std::thread::sleep(Duration::from_millis(250));
+        });
+        assert_eq!(tv.send_command_to(addr, "POWER off\r", true).unwrap(), "");
+        handle.join().unwrap();
     }
 }

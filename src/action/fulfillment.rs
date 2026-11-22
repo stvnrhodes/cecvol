@@ -18,30 +18,35 @@ pub struct FulfillmentHandler {
 fn available_inputs() -> Value {
     json!([
         {
-            "key": "HDMI 1",
+            "key": "hdmi_1",
             "names": [{ "lang": "en", "name_synonym": ["HDMI 1", "HDMI one", "input 1"] }]
         },
         {
-            "key": "HDMI 2",
+            "key": "hdmi_2",
             "names": [{ "lang": "en", "name_synonym": ["HDMI 2", "HDMI two", "input 2"] }]
         },
         {
-            "key": "HDMI 3",
+            "key": "hdmi_3",
             "names": [{ "lang": "en", "name_synonym": ["HDMI 3", "HDMI three", "input 3"] }]
         },
         {
-            "key": "HDMI 4",
+            "key": "hdmi_4",
             "names": [{ "lang": "en", "name_synonym": ["HDMI 4", "HDMI four", "input 4"] }]
         }
     ])
 }
 
 fn parse_input(raw: &str) -> Option<tv::Input> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "1" | "hdmi 1" | "hdmi1" => Some(tv::Input::HDMI1),
-        "2" | "hdmi 2" | "hdmi2" => Some(tv::Input::HDMI2),
-        "3" | "hdmi 3" | "hdmi3" => Some(tv::Input::HDMI3),
-        "4" | "hdmi 4" | "hdmi4" => Some(tv::Input::HDMI4),
+    let normalized: String = raw
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '_' | '-'))
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    match normalized.as_str() {
+        "1" | "hdmi1" | "input1" => Some(tv::Input::HDMI1),
+        "2" | "hdmi2" | "input2" => Some(tv::Input::HDMI2),
+        "3" | "hdmi3" | "input3" => Some(tv::Input::HDMI3),
+        "4" | "hdmi4" | "input4" => Some(tv::Input::HDMI4),
         _ => None,
     }
 }
@@ -712,5 +717,15 @@ mod tests {
 
         let resp = handler.handle(&req, "user@example.com");
         assert_eq!(resp, json!({}));
+    }
+
+    #[test]
+    fn test_parse_input_variants() {
+        assert!(matches!(parse_input("hdmi_2"), Some(tv::Input::HDMI2)));
+        assert!(matches!(parse_input("HDMI 2"), Some(tv::Input::HDMI2)));
+        assert!(matches!(parse_input("hdmi-3"), Some(tv::Input::HDMI3)));
+        assert!(matches!(parse_input("input 4"), Some(tv::Input::HDMI4)));
+        assert!(matches!(parse_input("1"), Some(tv::Input::HDMI1)));
+        assert!(parse_input("hdmi_5").is_none());
     }
 }
