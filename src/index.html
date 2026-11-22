@@ -215,11 +215,37 @@
                 label.textContent = '...';
             }
         }
+        // Non-linear position mapping. The slider's 0-30 volume range is
+        // stretched across 70% of the track, giving the common 5-30 range
+        // more room (and finer granularity) than the rest of the scale.
+        const VOL_BREAK_VOLUME = 30;
+        const VOL_BREAK_POSITION = 0.7;
+        function positionToVolume(p) {
+            if (p <= VOL_BREAK_POSITION) {
+                return Math.round(VOL_BREAK_VOLUME * p / VOL_BREAK_POSITION);
+            }
+            return Math.round(VOL_BREAK_VOLUME + (100 - VOL_BREAK_VOLUME) * (p - VOL_BREAK_POSITION) / (1 - VOL_BREAK_POSITION));
+        }
+        function volumeToPosition(v) {
+            if (v <= VOL_BREAK_VOLUME) {
+                return v / VOL_BREAK_VOLUME * VOL_BREAK_POSITION;
+            }
+            return VOL_BREAK_POSITION + (v - VOL_BREAK_VOLUME) / (100 - VOL_BREAK_VOLUME) * (1 - VOL_BREAK_POSITION);
+        }
+        function volumeSliderKey(e) {
+            const delta = { ArrowUp: 1, ArrowRight: 1, ArrowDown: -1, ArrowLeft: -1 }[e.key];
+            if (delta === undefined) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const slider = document.getElementById('volume-slider');
+            const next = Math.min(100, Math.max(0, positionToVolume(slider.value / 1000) + delta));
+            setVolume(next);
+        }
         function updateVolumeUI(level) {
             const slider = document.getElementById('volume-slider');
             const label = document.getElementById('volume-value');
             if (typeof level === 'number' && !Number.isNaN(level)) {
-                slider.value = level;
+                slider.value = Math.round(volumeToPosition(level) * 1000);
                 label.textContent = level;
             } else {
                 label.textContent = '--';
@@ -408,10 +434,19 @@
             </button>
         </div>
         <div class="volume-slider-row">
-            <input id="volume-slider" type="range" min="0" max="100" value="0"
-                oninput="document.getElementById('volume-value').textContent = this.value"
-                onchange="setVolume(this.value)" aria-label="Volume">
-            <span id="volume-value" class="volume-value">--</span>
+            <input id="volume-slider" type="range" min="0" max="1000" step="1" value="0"
+                list="volume-ticks"
+                oninput="document.getElementById('volume-value').textContent = positionToVolume(this.value / 1000)"
+                onchange="setVolume(positionToVolume(this.value / 1000))"
+                onkeydown="volumeSliderKey(event)"
+                aria-label="Volume">
+            <datalist id="volume-ticks">
+                <option value="117">5</option>
+                <option value="233">10</option>
+                <option value="467">20</option>
+                <option value="700">30</option>
+            </datalist>
+            <output id="volume-value" class="volume-value" for="volume-slider">--</output>
         </div>
         <div class="inputs">
             <button class="mdc-button mdc-button--raised" onclick="setInput('1')">

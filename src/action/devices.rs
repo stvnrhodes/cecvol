@@ -20,7 +20,28 @@ pub enum RequestPayload {
 #[derive(Deserialize)]
 pub struct ExecuteCommand {
     pub devices: Vec<DeviceId>,
+    #[serde(deserialize_with = "deserialize_executions")]
     pub execution: Vec<Execution>,
+}
+
+/// Google Home omits `"params"` on parameterless commands like `mediaPause` / `mediaResume`,
+/// which serde's adjacently-tagged enum derive rejects unless `"params": {}` is present.
+fn deserialize_executions<'de, D>(deserializer: D) -> Result<Vec<Execution>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut items: Vec<Value> = Vec::deserialize(deserializer)?;
+    for item in &mut items {
+        if let Some(obj) = item.as_object_mut() {
+            if obj.get("params").is_none_or(Value::is_null) {
+                obj.insert("params".to_string(), Value::Object(Default::default()));
+            }
+        }
+    }
+    items
+        .into_iter()
+        .map(|v| serde_json::from_value(v).map_err(serde::de::Error::custom))
+        .collect()
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -170,8 +191,11 @@ mod tests {
                                 "params": {}
                             },
                             {
-                                "command": "action.devices.commands.mediaResume",
-                                "params": {}
+                                "command": "action.devices.commands.mediaResume"
+                            },
+                            {
+                                "command": "action.devices.commands.mediaPause",
+                                "params": null
                             }
                         ]
                     }]
@@ -184,6 +208,7 @@ mod tests {
             RequestPayload::Execute { commands } => {
                 assert_eq!(commands[0].execution[0], Execution::MediaPause {});
                 assert_eq!(commands[0].execution[1], Execution::MediaResume {});
+                assert_eq!(commands[0].execution[2], Execution::MediaPause {});
             }
             _ => panic!("Expected Execute payload"),
         }

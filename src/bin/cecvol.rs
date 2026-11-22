@@ -57,7 +57,7 @@ struct Args {
     oauth_redirect_uri: Vec<String>,
 
     /// Default relative volume step size advertised to Google Home.
-    #[arg(long, env = "VOLUME_STEP_SIZE", default_value_t = 3)]
+    #[arg(long, env = "VOLUME_STEP_SIZE", default_value_t = 1)]
     volume_step_size: i32,
 }
 
