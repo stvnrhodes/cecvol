@@ -553,6 +553,9 @@ impl tv::TVConnection for CEC {
     fn set_input(&mut self, input: tv::Input) -> Result<(), TVError> {
         Ok(self.set_input(input)?)
     }
+    fn play_pause(&mut self) -> Result<(), TVError> {
+        Ok(self.play_pause()?)
+    }
 }
 
 pub struct CEC {
@@ -829,6 +832,9 @@ impl CEC {
         })?;
         *self.input_state.lock().unwrap() = new_addr;
         Ok(())
+    }
+    pub fn play_pause(&mut self) -> Result<(), CECError> {
+        self.press_key(UserControl::PausePlayFunction)
     }
 
     pub fn transmit_raw(&self, input: &[u8]) -> Result<(), CECError> {

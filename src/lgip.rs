@@ -103,6 +103,9 @@ impl LGTV {
         encoded
     }
     fn decrypt(&self, cipher: &[u8]) -> Result<String, DecryptionError> {
+        if cipher.len() < ENCRYPTION_KEY_LENGTH {
+            return Err(DecryptionError::InvalidLength);
+        }
         let iv_decryptor = ecb::Decryptor::<aes::Aes128>::new(&self.derived_key.into());
         let iv_vec = iv_decryptor
             .decrypt_padded_vec_mut::<NoPadding>(cipher[..ENCRYPTION_KEY_LENGTH].into())?;
@@ -126,8 +129,10 @@ impl LGTV {
             .next()
             .unwrap();
         let mut stream = TcpStream::connect_timeout(&addr, Duration::from_millis(200))?;
+        stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+        stream.set_write_timeout(Some(Duration::from_millis(500)))?;
         let payload = self.encrypt(cmd);
-        stream.write(&payload)?;
+        stream.write_all(&payload)?;
         let mut resp = [0; 512];
         let len = stream.read(&mut resp)?;
         let decrypted = self
@@ -174,6 +179,10 @@ impl tv::TVConnection for LGTV {
         };
         let cmd = format!("INPUT_SELECT {input}\r");
         self.send_command(&cmd)?;
+        Ok(())
+    }
+    fn play_pause(&mut self) -> Result<(), TVError> {
+        self.send_command("KEY_ACTION play\r")?;
         Ok(())
     }
 }

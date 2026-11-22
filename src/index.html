@@ -98,6 +98,11 @@
                 }
             })
         }
+        function playPause() {
+            executeCommand({
+                'command': 'action.devices.commands.mediaPause',
+            })
+        }
         document.onkeydown = function (e) {
             e = e || window.event;
             if (e.keyCode == '38') {
@@ -120,6 +125,10 @@
         <button class="mdc-button mdc-button--raised" onclick="onOff(true)">
             <span class="mdc-button__ripple"></span>
             <i class="material-icons">power</i>
+        </button>
+        <button class="mdc-button mdc-button--raised" onclick="playPause()">
+            <span class="mdc-button__ripple"></span>
+            <i class="material-icons">play_arrow</i><i class="material-icons">pause</i>
         </button>
     </p>
     <p>

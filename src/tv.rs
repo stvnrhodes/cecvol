@@ -32,4 +32,5 @@ pub trait TVConnection {
     fn volume_change(&mut self, relative_steps: i32) -> Result<(), TVError>;
     fn mute(&mut self, mute: bool) -> Result<(), TVError>;
     fn set_input(&mut self, input: Input) -> Result<(), TVError>;
+    fn play_pause(&mut self) -> Result<(), TVError>;
 }

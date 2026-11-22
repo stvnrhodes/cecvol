@@ -395,6 +395,10 @@ pub enum Execution {
     // For triggering WakeOnLAN packet, not a real command.
     #[serde(rename = "action.devices.commands.wol")]
     WakeOnLan,
+
+    // Toggle play/pause media playback.
+    #[serde(rename = "action.devices.commands.mediaPause")]
+    MediaPause,
 }
 
 #[derive(Deserialize)]
@@ -466,6 +470,33 @@ mod tests {
                     _ => panic!("Expected SetVolume execution"),
                 }
             }
+            _ => panic!("Expected Execute payload"),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_media_pause_request() {
+        let json = json!({
+            "requestId": "no-id",
+            "inputs": [{
+                "intent": "action.devices.EXECUTE",
+                "payload": {
+                    "commands": [{
+                        "devices": [{"id": "123"}],
+                        "execution": [{
+                            "command": "action.devices.commands.mediaPause"
+                        }]
+                    }]
+                }
+            }]
+        });
+
+        let req: FulfillmentRequest = serde_json::from_value(json).unwrap();
+        match &req.inputs[0] {
+            RequestPayload::Execute { commands } => match &commands[0].execution[0] {
+                Execution::MediaPause => {}
+                _ => panic!("Expected MediaPause execution"),
+            },
             _ => panic!("Expected Execute payload"),
         }
     }

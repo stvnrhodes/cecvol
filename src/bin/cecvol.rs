@@ -94,7 +94,7 @@ fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Ve
                                     "supportPlaybackState": false,
                                     "commandOnlyOnOff": true,
                                     "queryOnlyOnOff": false,
-                                    "transportControlSupportedCommands": [],
+                                    "transportControlSupportedCommands": ["PAUSE"],
                                     "volumeMaxLevel": 100,
                                     "volumeCanMuteAndUnmute": true,
                                     "volumeDefaultPercentage": 12,
@@ -145,6 +145,13 @@ fn fulfillment(app_state: AppState, request: &mut Request) -> Response<Cursor<Ve
                             Execution::WakeOnLan => {
                                 if let Err(e) = wol::wake(app_state.server_mac_addr) {
                                     error!("Failed to wake on lan: {}", e);
+                                    return Response::from_string(e.to_string())
+                                        .with_status_code(StatusCode(500));
+                                }
+                            }
+                            Execution::MediaPause => {
+                                if let Err(e) = cec.play_pause() {
+                                    error!("Failed to toggle play/pause: {}", e);
                                     return Response::from_string(e.to_string())
                                         .with_status_code(StatusCode(500));
                                 }
