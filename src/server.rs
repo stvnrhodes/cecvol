@@ -79,7 +79,8 @@ fn fulfillment(
     let req: FulfillmentRequest = match serde_json::from_str(&content) {
         Ok(r) => r,
         Err(e) => {
-            error!("Failed to parse JSON: {}", e);
+            let snippet: String = content.chars().take(512).collect();
+            error!("Failed to parse JSON: {} (body={})", e, snippet);
             return Response::from_string(e.to_string()).with_status_code(StatusCode(400));
         }
     };

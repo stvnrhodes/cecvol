@@ -77,6 +77,7 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -381,7 +382,7 @@ fun sendPostRequest(cmd: Execution, context: Context) {
         "Authorization", "Basic " + Base64.encodeToString(auth.toByteArray(), Base64.DEFAULT)
       )
       val req = FulfillmentRequest(
-        requestId = "no-id",
+        requestId = "wear-" + UUID.randomUUID().toString().take(8),
         inputs = listOf(
           RequestPayload(
             intent = "action.devices.EXECUTE", payload = ExecutePayload(

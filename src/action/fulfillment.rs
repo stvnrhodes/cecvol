@@ -60,6 +60,7 @@ impl FulfillmentHandler {
         if let Some(input) = req.inputs.first() {
             match input {
                 RequestPayload::Sync => {
+                    info!("SYNC req={} user={}", request_id, agent_user_id);
                     return serde_json::to_value(&FulfillmentResponse {
                         request_id,
                         payload: json!({
@@ -102,6 +103,8 @@ impl FulfillmentHandler {
                     .unwrap();
                 }
                 RequestPayload::Query { devices } => {
+                    let ids: Vec<&str> = devices.iter().map(|d| d.id.as_str()).collect();
+                    info!("QUERY req={} devices={:?}", request_id, ids);
                     let mut device_map = Map::new();
                     let (is_on, current_volume) = if devices.iter().any(|d| d.id == DEVICE_ID) {
                         let mut cec = self.cec.lock().unwrap();
@@ -156,6 +159,7 @@ impl FulfillmentHandler {
                         let mut error_code: Option<&'static str> = None;
 
                         for e in &c.execution {
+                            info!("EXECUTE req={} devices={:?} {:?}", request_id, ids, e);
                             let res: Result<(), &'static str> = match e {
                                 Execution::VolumeRelative { relative_steps } => {
                                     let steps = (*relative_steps).clamp(
@@ -256,7 +260,7 @@ impl FulfillmentHandler {
                     .unwrap();
                 }
                 RequestPayload::Disconnect => {
-                    info!("Received DISCONNECT intent for user {}", agent_user_id);
+                    info!("DISCONNECT req={} user={}", request_id, agent_user_id);
                     return json!({});
                 }
             }

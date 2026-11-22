@@ -169,6 +169,12 @@
         }
     </style>
     <script>
+        function newRequestId() {
+            const id = (typeof crypto !== 'undefined' && crypto.randomUUID)
+                ? crypto.randomUUID().slice(0, 8)
+                : Math.random().toString(36).slice(2, 10);
+            return 'web-' + id;
+        }
         function postFulfillment(input) {
             return fetch('/fulfillment', {
                 method: 'POST',
@@ -177,7 +183,7 @@
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    'requestId': 'no-id',
+                    'requestId': newRequestId(),
                     'inputs': [input]
                 })
             }).then(response => response.json());
