@@ -37,6 +37,7 @@ pub enum Key {
     Ok,
     Back,
     Home,
+    Settings,
 }
 
 pub trait TVConnection {

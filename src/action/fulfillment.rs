@@ -202,6 +202,7 @@ impl FulfillmentHandler {
                                         "ok" => Some(tv::Key::Ok),
                                         "back" => Some(tv::Key::Back),
                                         "home" => Some(tv::Key::Home),
+                                        "settingmenu" | "settings" => Some(tv::Key::Settings),
                                         _ => None,
                                     };
                                     match key {

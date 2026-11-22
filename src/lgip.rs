@@ -303,6 +303,7 @@ impl tv::TVConnection for LGTV {
             tv::Key::Ok => "ok",
             tv::Key::Back => "returnback",
             tv::Key::Home => "myapp",
+            tv::Key::Settings => "settingmenu",
         };
         self.send_command(&format!("KEY_ACTION {action}\r"))?;
         Ok(())

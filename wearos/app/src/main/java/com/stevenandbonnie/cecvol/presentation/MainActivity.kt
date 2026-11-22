@@ -278,10 +278,8 @@ fun WearApp() {
             modifier = contentModifier,
             onClick = {
               sendPostRequest(
-                Execution(
-                  command = "action.devices.commands.wol",
-                  params = emptyMap(),
-                ), context
+                Execution(command = "action.devices.commands.wol"),
+                context,
               )
             },
             label = {
@@ -432,7 +430,7 @@ data class ExecuteCommand(val devices: List<DeviceId>, val execution: List<Execu
 
 data class DeviceId(val id: String)
 
-data class Execution(val command: String, val params: Map<String, Any>?)
+data class Execution(val command: String, val params: Map<String, Any>? = null)
 
 @Preview(device = WearDevices.SMALL_ROUND, showSystemUi = true)
 @Composable

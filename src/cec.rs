@@ -812,6 +812,7 @@ impl CEC {
             tv::Key::Ok => UserControl::Select,
             tv::Key::Back => UserControl::Exit,
             tv::Key::Home => UserControl::RootMenu,
+            tv::Key::Settings => UserControl::SetupMenu,
         };
         self.press_key(code)
     }

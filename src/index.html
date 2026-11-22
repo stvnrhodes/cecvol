@@ -98,6 +98,7 @@
         .dpad,
         .volume,
         .inputs,
+        .menu,
         .wol {
             display: grid;
             gap: clamp(8px, 1.2dvh, 12px);
@@ -108,7 +109,8 @@
             grid-template-columns: repeat(3, 1fr);
         }
 
-        .inputs {
+        .inputs,
+        .menu {
             grid-template-columns: repeat(2, 1fr);
         }
 
@@ -167,7 +169,7 @@
         }
     </style>
     <script>
-        function executeCommand(cmd) {
+        function postFulfillment(input) {
             return fetch('/fulfillment', {
                 method: 'POST',
                 mode: 'same-origin',
@@ -176,20 +178,22 @@
                 },
                 body: JSON.stringify({
                     'requestId': 'no-id',
-                    'inputs': [{
-                        'intent': 'action.devices.EXECUTE',
-                        'payload': {
-                            'commands': [{
-                                'devices': [{
-                                    'id': '1'
-                                }],
-                                'execution': [cmd]
-                            }]
-                        }
-                    }]
+                    'inputs': [input]
                 })
+            }).then(response => response.json());
+        }
+        function executeCommand(cmd) {
+            return postFulfillment({
+                'intent': 'action.devices.EXECUTE',
+                'payload': {
+                    'commands': [{
+                        'devices': [{
+                            'id': '1'
+                        }],
+                        'execution': [cmd]
+                    }]
+                }
             })
-                .then(response => response.json())
                 .then(data => {
                     console.log(data);
                     document.getElementById("status").style.visibility = "hidden";
@@ -259,25 +263,14 @@
             pendingPowerRefreshes = [];
         }
         function refreshState() {
-            fetch('/fulfillment', {
-                method: 'POST',
-                mode: 'same-origin',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    'requestId': 'no-id',
-                    'inputs': [{
-                        'intent': 'action.devices.QUERY',
-                        'payload': {
-                            'devices': [{
-                                'id': '1'
-                            }]
-                        }
+            postFulfillment({
+                'intent': 'action.devices.QUERY',
+                'payload': {
+                    'devices': [{
+                        'id': '1'
                     }]
-                })
+                }
             })
-                .then(response => response.json())
                 .then(data => {
                     const dev = data && data.payload && data.payload.devices && data.payload.devices['1'];
                     if (!dev) return;
@@ -322,8 +315,12 @@
         }
         function wol() {
             executeCommand({
-                'command': 'action.devices.commands.wol',
-                'params': {}
+                'command': 'action.devices.commands.wol'
+            })
+        }
+        function playPause() {
+            executeCommand({
+                'command': 'action.devices.commands.mediaPause'
             })
         }
         function setInput(newInput) {
@@ -414,9 +411,9 @@
                 <span class="mdc-button__ripple"></span>
                 <i class="material-icons">keyboard_arrow_down</i>
             </button>
-            <button class="mdc-button mdc-button--raised" onclick="sendKey('home')">
+            <button class="mdc-button mdc-button--raised" onclick="playPause()" aria-label="Play / Pause">
                 <span class="mdc-button__ripple"></span>
-                <i class="material-icons">home</i>
+                <i class="material-icons">play_arrow</i><i class="material-icons">pause</i>
             </button>
         </div>
         <div class="volume">
@@ -470,6 +467,16 @@
             <button class="mdc-button mdc-button--raised" onclick="wol()">
                 <span class="mdc-button__ripple"></span>
                 <i class="material-icons">transcribe</i>&nbsp;Wake Serpens
+            </button>
+        </div>
+        <div class="menu">
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('home')" aria-label="Home">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">home</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('settingmenu')" aria-label="Settings">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">settings</i>
             </button>
         </div>
     </div>
