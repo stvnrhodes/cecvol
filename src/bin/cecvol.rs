@@ -1,5 +1,4 @@
 use cecvol::action::fulfillment::FulfillmentHandler;
-use cecvol::cec;
 use cecvol::lgip;
 use cecvol::oauth;
 use cecvol::server::{self, AppState};
@@ -16,13 +15,13 @@ struct Args {
     #[arg(long, default_value = "0.0.0.0:8080")]
     http_addr: String,
 
-    /// If true, use a fake cec connection instead of directly using the hardware.
+    /// Use an in-memory fake TV instead of connecting to a real LG TV.
     #[arg(long)]
-    use_fake_cec_conn: bool,
+    use_fake_tv: bool,
 
-    /// If true, control over ip.
-    #[arg(long)]
-    use_lg_ip_control: bool,
+    /// Hostname or IP address of the LG TV.
+    #[arg(long, env = "LG_ADDR", default_value = "LGWebOSTV.local")]
+    lg_addr: String,
 
     /// Keycode for pairing the LG tv with the server.
     #[arg(long, env = "LG_KEYCODE")]
@@ -113,40 +112,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .format_timestamp(Some(env_logger::fmt::TimestampPrecision::Millis))
         .init();
 
-    let tv: Box<dyn tv::TVConnection + Sync + Send> = if args.use_lg_ip_control {
-        let tv_mac_addr = parse_mac(args.lg_mac_addr.as_deref().unwrap())?;
-        Box::new(lgip::LGTV::new(
-            "LGWebOSTV.local".to_string(),
-            tv_mac_addr,
-            args.lg_keycode.as_deref().unwrap(),
-        ))
+    let tv: Box<dyn tv::TVConnection + Sync + Send> = if args.use_fake_tv {
+        info!("Using in-memory fake TV");
+        Box::new(tv::FakeTV::default())
     } else {
-        info!("Creating CEC connection...");
-        let osd_name = "cecvol";
-        // LG's vendor code seems to be required for UserControl commands to work.
-        let vendor_id = 0x00e091;
-        let vchi: Arc<dyn cec::CECConnection> = if args.use_fake_cec_conn {
-            Arc::new(cec::noop::LogOnlyConn {})
-        } else {
-            let vchi = cec::vchi::HardwareInterface::init()?;
-            vchi.set_osd_name(osd_name)?;
-            vchi.set_vendor_id(vendor_id)?;
-
-            if vchi.get_logical_addr()? == cec::LogicalAddress::Broadcast
-                && vchi.get_physical_addr()? != 0xffff
-            {
-                vchi.alloc_logical_addr()?;
-            }
-            Arc::new(vchi)
-        };
-        let cec_conn = cec::CEC::new(vchi, osd_name, vendor_id)?;
-        cec_conn.poll_all()?;
-        Box::new(cec_conn)
+        let mac_str = args
+            .lg_mac_addr
+            .as_deref()
+            .ok_or("--lg-mac-addr / LG_MAC_ADDR is required unless --use-fake-tv is set")?;
+        let keycode = args
+            .lg_keycode
+            .as_deref()
+            .ok_or("--lg-keycode / LG_KEYCODE is required unless --use-fake-tv is set")?;
+        let tv_mac_addr = parse_mac(mac_str)?;
+        Box::new(lgip::LGTV::new(args.lg_addr.clone(), tv_mac_addr, keycode))
     };
 
     let app_state = AppState {
         fulfillment: FulfillmentHandler {
-            cec: Arc::new(Mutex::new(tv)),
+            tv: Arc::new(Mutex::new(tv)),
             server_mac_addr: parse_mac(&args.server_mac_addr)?,
             volume_step_size: args.volume_step_size,
         },

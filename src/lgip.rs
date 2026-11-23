@@ -298,9 +298,6 @@ fn parse_mute(resp: &str) -> io::Result<bool> {
 }
 
 impl tv::TVConnection for LGTV {
-    fn supports_state_query(&self) -> bool {
-        true
-    }
     fn on_off(&mut self, on: bool) -> Result<(), TVError> {
         if on {
             wol::wake(self.mac_address)?;
@@ -316,7 +313,7 @@ impl tv::TVConnection for LGTV {
         // For multi-step changes (e.g. Google Home voice commands), read current volume and
         // set directly in 2 round-trips instead of opening up to 25 sequential TCP connections.
         if relative_steps.abs() > 1 {
-            if let Ok(Some(current)) = self.get_volume() {
+            if let Ok(current) = self.get_volume() {
                 return self.set_volume(current + relative_steps);
             }
         }
@@ -337,9 +334,9 @@ impl tv::TVConnection for LGTV {
         self.send_command(&cmd)?;
         Ok(())
     }
-    fn get_volume(&mut self) -> Result<Option<i32>, TVError> {
+    fn get_volume(&mut self) -> Result<i32, TVError> {
         let resp = self.send_command("CURRENT_VOL\r")?;
-        Ok(Some(parse_volume(&resp)?))
+        Ok(parse_volume(&resp)?)
     }
     fn mute(&mut self, mute: bool) -> Result<(), TVError> {
         let m = if mute { "on" } else { "off" };
@@ -347,9 +344,9 @@ impl tv::TVConnection for LGTV {
         self.send_command(&cmd)?;
         Ok(())
     }
-    fn get_mute(&mut self) -> Result<Option<bool>, TVError> {
+    fn get_mute(&mut self) -> Result<bool, TVError> {
         let resp = self.send_command("MUTE_STATE\r")?;
-        Ok(Some(parse_mute(&resp)?))
+        Ok(parse_mute(&resp)?)
     }
     fn set_input(&mut self, input: tv::Input) -> Result<(), TVError> {
         let input = match input {

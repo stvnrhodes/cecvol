@@ -10,7 +10,7 @@ const MAX_RELATIVE_VOLUME_STEPS: i32 = 25;
 
 #[derive(Clone)]
 pub struct FulfillmentHandler {
-    pub cec: Arc<Mutex<Box<dyn TVConnection + Sync + Send>>>,
+    pub tv: Arc<Mutex<Box<dyn TVConnection + Sync + Send>>>,
     pub server_mac_addr: [u8; 6],
     pub volume_step_size: i32,
 }
@@ -66,33 +66,6 @@ impl FulfillmentHandler {
             match input {
                 RequestPayload::Sync => {
                     info!("SYNC req={} user={}", request_id, agent_user_id);
-                    let supports_state = self.cec.lock().unwrap().supports_state_query();
-                    let command_only = !supports_state;
-                    let mut traits = vec![
-                        "action.devices.traits.InputSelector",
-                        "action.devices.traits.OnOff",
-                        "action.devices.traits.TransportControl",
-                        "action.devices.traits.Volume",
-                    ];
-                    let mut attributes = json!({
-                        "availableInputs": available_inputs(),
-                        "commandOnlyInputSelector": true,
-                        "orderedInputs": false,
-                        "commandOnlyOnOff": command_only,
-                        "queryOnlyOnOff": false,
-                        "transportControlSupportedCommands": ["PAUSE", "RESUME"],
-                        "volumeMaxLevel": 100,
-                        "volumeCanMuteAndUnmute": true,
-                        "volumeDefaultPercentage": 15,
-                        "levelStepSize": self.volume_step_size,
-                        "commandOnlyVolume": command_only
-                    });
-                    if supports_state {
-                        traits.push("action.devices.traits.MediaState");
-                        let attrs = attributes.as_object_mut().unwrap();
-                        attrs.insert("supportActivityState".to_string(), json!(true));
-                        attrs.insert("supportPlaybackState".to_string(), json!(false));
-                    }
                     return serde_json::to_value(&FulfillmentResponse {
                         request_id,
                         payload: json!({
@@ -101,7 +74,13 @@ impl FulfillmentHandler {
                                 {
                                     "id": DEVICE_ID,
                                     "type": "action.devices.types.AUDIO_VIDEO_RECEIVER",
-                                    "traits": traits,
+                                    "traits": [
+                                        "action.devices.traits.InputSelector",
+                                        "action.devices.traits.MediaState",
+                                        "action.devices.traits.OnOff",
+                                        "action.devices.traits.TransportControl",
+                                        "action.devices.traits.Volume"
+                                    ],
                                     "name": {
                                         "name": "cecvol"
                                     },
@@ -110,7 +89,21 @@ impl FulfillmentHandler {
                                         "manufacturer": "LG",
                                         "model": "cecvol"
                                     },
-                                    "attributes": attributes
+                                    "attributes": {
+                                        "availableInputs": available_inputs(),
+                                        "commandOnlyInputSelector": true,
+                                        "orderedInputs": false,
+                                        "commandOnlyOnOff": false,
+                                        "queryOnlyOnOff": false,
+                                        "supportActivityState": true,
+                                        "supportPlaybackState": false,
+                                        "transportControlSupportedCommands": ["PAUSE", "RESUME"],
+                                        "volumeMaxLevel": 100,
+                                        "volumeCanMuteAndUnmute": true,
+                                        "volumeDefaultPercentage": 15,
+                                        "levelStepSize": self.volume_step_size,
+                                        "commandOnlyVolume": false
+                                    }
                                 }
                             ]
                         }),
@@ -121,48 +114,41 @@ impl FulfillmentHandler {
                     let ids: Vec<&str> = devices.iter().map(|d| d.id.as_str()).collect();
                     info!("QUERY req={} devices={:?}", request_id, ids);
                     let mut device_map = Map::new();
-                    let queried_state = if devices.iter().any(|d| d.id == DEVICE_ID) {
-                        let mut cec = self.cec.lock().unwrap();
-                        if cec.supports_state_query() {
-                            match cec.get_volume() {
-                                Ok(Some(vol)) => {
-                                    let is_muted = match cec.get_mute() {
-                                        Ok(Some(m)) => m,
-                                        Ok(None) => false,
-                                        Err(e) => {
-                                            error!("Failed to query mute state: {}", e);
-                                            false
-                                        }
-                                    };
-                                    Some((true, vol, is_muted))
-                                }
-                                Ok(None) => None,
-                                Err(e) => {
-                                    error!("Failed to query volume: {}", e);
-                                    Some((false, 0, false))
-                                }
+                    let (on, current_volume, is_muted) = if devices.iter().any(|d| d.id == DEVICE_ID)
+                    {
+                        let mut tv = self.tv.lock().unwrap();
+                        match tv.get_volume() {
+                            Ok(vol) => {
+                                let muted = match tv.get_mute() {
+                                    Ok(m) => m,
+                                    Err(e) => {
+                                        error!("Failed to query mute state: {}", e);
+                                        false
+                                    }
+                                };
+                                (true, vol, muted)
                             }
-                        } else {
-                            None
+                            Err(e) => {
+                                error!("Failed to query volume: {}", e);
+                                (false, 0, false)
+                            }
                         }
                     } else {
-                        None
+                        (false, 0, false)
                     };
                     for d in devices {
                         if d.id == DEVICE_ID {
-                            let mut state = Map::new();
-                            state.insert("online".to_string(), json!(true));
-                            state.insert("status".to_string(), json!("SUCCESS"));
-                            if let Some((on, vol, is_muted)) = queried_state {
-                                state.insert("on".to_string(), json!(on));
-                                state.insert(
-                                    "activityState".to_string(),
-                                    json!(if on { "ACTIVE" } else { "STANDBY" }),
-                                );
-                                state.insert("currentVolume".to_string(), json!(vol));
-                                state.insert("isMuted".to_string(), json!(is_muted));
-                            }
-                            device_map.insert(d.id.clone(), Value::Object(state));
+                            device_map.insert(
+                                d.id.clone(),
+                                json!({
+                                    "online": true,
+                                    "status": "SUCCESS",
+                                    "on": on,
+                                    "activityState": if on { "ACTIVE" } else { "STANDBY" },
+                                    "currentVolume": current_volume,
+                                    "isMuted": is_muted
+                                }),
+                            );
                         } else {
                             device_map.insert(
                                 d.id.clone(),
@@ -183,8 +169,7 @@ impl FulfillmentHandler {
                     .unwrap();
                 }
                 RequestPayload::Execute { commands } => {
-                    let mut cec = self.cec.lock().unwrap();
-                    let supports_state = cec.supports_state_query();
+                    let mut tv = self.tv.lock().unwrap();
                     let mut results = Vec::new();
 
                     for c in commands {
@@ -201,24 +186,21 @@ impl FulfillmentHandler {
                                         -MAX_RELATIVE_VOLUME_STEPS,
                                         MAX_RELATIVE_VOLUME_STEPS,
                                     );
-                                    cec.volume_change(steps)
+                                    tv.volume_change(steps)
                                         .map(|()| {
-                                            if supports_state {
-                                                states.insert("on".to_string(), json!(true));
+                                            states.insert("on".to_string(), json!(true));
+                                            states.insert(
+                                                "activityState".to_string(),
+                                                json!("ACTIVE"),
+                                            );
+                                            if let Ok(vol) = tv.get_volume() {
                                                 states.insert(
-                                                    "activityState".to_string(),
-                                                    json!("ACTIVE"),
+                                                    "currentVolume".to_string(),
+                                                    json!(vol),
                                                 );
-                                                if let Ok(Some(vol)) = cec.get_volume() {
-                                                    states.insert(
-                                                        "currentVolume".to_string(),
-                                                        json!(vol),
-                                                    );
-                                                }
-                                                let muted =
-                                                    cec.get_mute().ok().flatten().unwrap_or(false);
-                                                states.insert("isMuted".to_string(), json!(muted));
                                             }
+                                            let muted = tv.get_mute().unwrap_or(false);
+                                            states.insert("isMuted".to_string(), json!(muted));
                                         })
                                         .map_err(|err| {
                                             error!("Failed to change volume: {}", err);
@@ -227,60 +209,53 @@ impl FulfillmentHandler {
                                 }
                                 Execution::SetVolume { volume_level } => {
                                     let clamped = (*volume_level).clamp(0, 100);
-                                    cec.set_volume(clamped)
+                                    tv.set_volume(clamped)
                                         .map(|()| {
-                                            if supports_state {
-                                                states.insert("on".to_string(), json!(true));
-                                                states.insert(
-                                                    "activityState".to_string(),
-                                                    json!("ACTIVE"),
-                                                );
-                                                states.insert(
-                                                    "currentVolume".to_string(),
-                                                    json!(clamped),
-                                                );
-                                                let muted =
-                                                    cec.get_mute().ok().flatten().unwrap_or(false);
-                                                states.insert("isMuted".to_string(), json!(muted));
-                                            }
+                                            states.insert("on".to_string(), json!(true));
+                                            states.insert(
+                                                "activityState".to_string(),
+                                                json!("ACTIVE"),
+                                            );
+                                            states.insert(
+                                                "currentVolume".to_string(),
+                                                json!(clamped),
+                                            );
+                                            let muted = tv.get_mute().unwrap_or(false);
+                                            states.insert("isMuted".to_string(), json!(muted));
                                         })
                                         .map_err(|err| {
                                             error!("Failed to set volume: {}", err);
                                             map_tv_error(&err)
                                         })
                                 }
-                                Execution::Mute { mute } => cec
+                                Execution::Mute { mute } => tv
                                     .mute(*mute)
                                     .map(|()| {
-                                        if supports_state {
-                                            states.insert("on".to_string(), json!(true));
+                                        states.insert("on".to_string(), json!(true));
+                                        states.insert(
+                                            "activityState".to_string(),
+                                            json!("ACTIVE"),
+                                        );
+                                        states.insert("isMuted".to_string(), json!(*mute));
+                                        if let Ok(vol) = tv.get_volume() {
                                             states.insert(
-                                                "activityState".to_string(),
-                                                json!("ACTIVE"),
+                                                "currentVolume".to_string(),
+                                                json!(vol),
                                             );
-                                            states.insert("isMuted".to_string(), json!(*mute));
-                                            if let Ok(Some(vol)) = cec.get_volume() {
-                                                states.insert(
-                                                    "currentVolume".to_string(),
-                                                    json!(vol),
-                                                );
-                                            }
                                         }
                                     })
                                     .map_err(|err| {
                                         error!("Failed to mute: {}", err);
                                         map_tv_error(&err)
                                     }),
-                                Execution::OnOff { on } => cec
+                                Execution::OnOff { on } => tv
                                     .on_off(*on)
                                     .map(|()| {
-                                        if supports_state {
-                                            states.insert("on".to_string(), json!(*on));
-                                            states.insert(
-                                                "activityState".to_string(),
-                                                json!(if *on { "ACTIVE" } else { "STANDBY" }),
-                                            );
-                                        }
+                                        states.insert("on".to_string(), json!(*on));
+                                        states.insert(
+                                            "activityState".to_string(),
+                                            json!(if *on { "ACTIVE" } else { "STANDBY" }),
+                                        );
                                     })
                                     .map_err(|err| {
                                         error!("Failed to turn on/off: {}", err);
@@ -293,7 +268,7 @@ impl FulfillmentHandler {
                                     })
                                 }
                                 Execution::MediaPause {} | Execution::MediaResume {} => {
-                                    cec.play_pause().map_err(|err| {
+                                    tv.play_pause().map_err(|err| {
                                         error!("Failed to toggle play/pause: {}", err);
                                         map_tv_error(&err)
                                     })
@@ -311,7 +286,7 @@ impl FulfillmentHandler {
                                         _ => None,
                                     };
                                     match key {
-                                        Some(k) => cec.send_key(k).map_err(|err| {
+                                        Some(k) => tv.send_key(k).map_err(|err| {
                                             error!("Failed to send key: {}", err);
                                             map_tv_error(&err)
                                         }),
@@ -322,7 +297,7 @@ impl FulfillmentHandler {
                                     }
                                 }
                                 Execution::SetInput { new_input } => match parse_input(new_input) {
-                                    Some(input) => cec.set_input(input).map_err(|err| {
+                                    Some(input) => tv.set_input(input).map_err(|err| {
                                         error!("Failed to set input: {}", err);
                                         map_tv_error(&err)
                                     }),
@@ -387,14 +362,10 @@ mod tests {
     struct MockTV {
         calls: Arc<Mutex<Vec<String>>>,
         fail_next: bool,
-        stateful: bool,
         muted: bool,
     }
 
     impl TVConnection for MockTV {
-        fn supports_state_query(&self) -> bool {
-            self.stateful
-        }
         fn on_off(&mut self, on: bool) -> Result<(), TVError> {
             if self.fail_next {
                 return Err(TVError::Other(Box::new(std::io::Error::new(
@@ -419,34 +390,28 @@ mod tests {
                 .push(format!("set_volume({})", level));
             Ok(())
         }
-        fn get_volume(&mut self) -> Result<Option<i32>, TVError> {
-            if !self.stateful {
-                return Ok(None);
-            }
+        fn get_volume(&mut self) -> Result<i32, TVError> {
             if self.fail_next {
                 return Err(TVError::Other(Box::new(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
                     "tv offline",
                 ))));
             }
-            Ok(Some(19))
+            Ok(19)
         }
         fn mute(&mut self, mute: bool) -> Result<(), TVError> {
             self.muted = mute;
             self.calls.lock().unwrap().push(format!("mute({})", mute));
             Ok(())
         }
-        fn get_mute(&mut self) -> Result<Option<bool>, TVError> {
-            if !self.stateful {
-                return Ok(None);
-            }
+        fn get_mute(&mut self) -> Result<bool, TVError> {
             if self.fail_next {
                 return Err(TVError::Other(Box::new(std::io::Error::new(
                     std::io::ErrorKind::TimedOut,
                     "tv offline",
                 ))));
             }
-            Ok(Some(self.muted))
+            Ok(self.muted)
         }
         fn set_input(&mut self, input: tv::Input) -> Result<(), TVError> {
             let name = match input {
@@ -471,27 +436,19 @@ mod tests {
         }
     }
 
-    fn make_handler_with(
-        fail_next: bool,
-        stateful: bool,
-    ) -> (FulfillmentHandler, Arc<Mutex<Vec<String>>>) {
+    fn make_handler(fail_next: bool) -> (FulfillmentHandler, Arc<Mutex<Vec<String>>>) {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mock = MockTV {
             calls: calls.clone(),
             fail_next,
-            stateful,
             muted: false,
         };
         let handler = FulfillmentHandler {
             server_mac_addr: [0; 6],
-            cec: Arc::new(Mutex::new(Box::new(mock))),
+            tv: Arc::new(Mutex::new(Box::new(mock))),
             volume_step_size: 3,
         };
         (handler, calls)
-    }
-
-    fn make_handler(fail_next: bool) -> (FulfillmentHandler, Arc<Mutex<Vec<String>>>) {
-        make_handler_with(fail_next, true)
     }
 
     #[test]
@@ -524,41 +481,6 @@ mod tests {
             json!(["PAUSE", "RESUME"])
         );
         assert_eq!(dev["attributes"]["levelStepSize"], 3);
-    }
-
-    #[test]
-    fn test_sync_and_query_command_only_backend() {
-        let (handler, _) = make_handler_with(false, false);
-        let sync_req: FulfillmentRequest = serde_json::from_value(json!({
-            "requestId": "req-sync-cmd",
-            "inputs": [{ "intent": "action.devices.SYNC" }]
-        }))
-        .unwrap();
-        let sync_resp = handler.handle(&sync_req, "user@example.com");
-        let dev = &sync_resp["payload"]["devices"][0];
-        assert_eq!(dev["attributes"]["commandOnlyOnOff"], true);
-        assert_eq!(dev["attributes"]["commandOnlyVolume"], true);
-        assert!(!dev["traits"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("action.devices.traits.MediaState")));
-
-        let query_req: FulfillmentRequest = serde_json::from_value(json!({
-            "requestId": "req-query-cmd",
-            "inputs": [{
-                "intent": "action.devices.QUERY",
-                "payload": { "devices": [{ "id": "1" }] }
-            }]
-        }))
-        .unwrap();
-        let query_resp = handler.handle(&query_req, "user@example.com");
-        let state = &query_resp["payload"]["devices"]["1"];
-        assert_eq!(state["online"], true);
-        assert_eq!(state["status"], "SUCCESS");
-        assert!(state.get("on").is_none());
-        assert!(state.get("activityState").is_none());
-        assert!(state.get("currentVolume").is_none());
-        assert!(state.get("isMuted").is_none());
     }
 
     #[test]

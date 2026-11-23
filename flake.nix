@@ -1,5 +1,5 @@
 {
-  description = "Control TV volume control over CEC via a raspberry pi.";
+  description = "Control LG TV volume, power, and inputs over LAN.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
