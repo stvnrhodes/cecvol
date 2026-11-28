@@ -148,6 +148,13 @@
             font-size: clamp(1rem, 2.2dvh, 1.2rem);
             border-radius: 10px;
             touch-action: manipulation;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+
+        .remote .mdc-button.holding {
+            filter: brightness(0.85);
         }
 
         .remote .mdc-button.muted {
@@ -155,8 +162,17 @@
             color: #fff;
         }
 
+        .remote .mdc-button.power-on {
+            background-color: #2e7d32;
+            color: #fff;
+        }
+
         .remote .dpad .mdc-button {
             height: clamp(54px, 9dvh, 78px);
+        }
+
+        .remote .dpad .dpad-down {
+            grid-column: 2;
         }
 
         .remote .material-icons {
@@ -245,18 +261,39 @@
                 }
             }
         }
+        let currentPowerOn = null;
         function updatePowerUI(on) {
+            currentPowerOn = typeof on === 'boolean' ? on : null;
             const badge = document.getElementById('power-status');
             const label = document.getElementById('power-label');
+            const btn = document.getElementById('power-btn');
             badge.classList.remove('on', 'off');
-            if (on === true) {
+            if (currentPowerOn === true) {
                 badge.classList.add('on');
                 label.textContent = 'On';
-            } else if (on === false) {
+                if (btn) {
+                    btn.classList.add('power-on');
+                    btn.setAttribute('aria-pressed', 'true');
+                    btn.setAttribute('aria-label', 'Turn TV off');
+                    btn.title = 'Turn TV off';
+                }
+            } else if (currentPowerOn === false) {
                 badge.classList.add('off');
                 label.textContent = 'Off';
+                if (btn) {
+                    btn.classList.remove('power-on');
+                    btn.setAttribute('aria-pressed', 'false');
+                    btn.setAttribute('aria-label', 'Turn TV on');
+                    btn.title = 'Turn TV on';
+                }
             } else {
                 label.textContent = '...';
+                if (btn) {
+                    btn.classList.remove('power-on');
+                    btn.setAttribute('aria-pressed', 'false');
+                    btn.setAttribute('aria-label', 'Power');
+                    btn.title = 'Toggle power';
+                }
             }
         }
         // Non-linear position mapping. The slider's 0-30 volume range is
@@ -320,7 +357,7 @@
                 });
         }
         function sendVol(level) {
-            executeCommand({
+            return executeCommand({
                 'command': 'action.devices.commands.volumeRelative',
                 'params': {
                     'relativeSteps': level
@@ -350,11 +387,6 @@
                 'command': 'action.devices.commands.wol'
             })
         }
-        function playPause() {
-            executeCommand({
-                'command': 'action.devices.commands.mediaPause'
-            })
-        }
         function setInput(newInput) {
             executeCommand({
                 'command': 'action.devices.commands.SetInput',
@@ -362,6 +394,9 @@
                     'newInput': newInput
                 }
             })
+        }
+        function togglePower() {
+            onOff(!currentPowerOn);
         }
         function onOff(on) {
             clearPendingPowerRefreshes();
@@ -376,13 +411,130 @@
             });
         }
         function sendKey(key) {
-            executeCommand({
+            return executeCommand({
                 'command': 'action.devices.commands.sendKey',
                 'params': {
                     'key': key
                 }
-            })
+            });
         }
+        const REPEAT_DELAY_MS = 400;
+        const REPEAT_INTERVAL_MS = 120;
+        let stopActiveRepeat = null;
+
+        function bindHoldRepeat(btn, action) {
+            let activeSession = null;
+            let pointerActive = false;
+            let lastPointerEnd = 0;
+
+            function stop() {
+                if (!activeSession) return;
+                activeSession.cancelled = true;
+                if (activeSession.timerId !== null) {
+                    clearTimeout(activeSession.timerId);
+                }
+                activeSession = null;
+                if (stopActiveRepeat === stop) {
+                    stopActiveRepeat = null;
+                }
+                btn.classList.remove('holding');
+            }
+
+            function start() {
+                if (stopActiveRepeat) stopActiveRepeat();
+                const session = { cancelled: false, timerId: null };
+                activeSession = session;
+                stopActiveRepeat = stop;
+                btn.classList.add('holding');
+
+                let delayDone = false;
+                let firstDone = false;
+
+                function maybeStartLoop() {
+                    if (session.cancelled || !delayDone || !firstDone) return;
+                    (function step() {
+                        if (session.cancelled) return;
+                        const startedAt = Date.now();
+                        Promise.resolve(action()).then(() => {
+                            if (session.cancelled) return;
+                            const wait = Math.max(0, REPEAT_INTERVAL_MS - (Date.now() - startedAt));
+                            session.timerId = setTimeout(() => {
+                                session.timerId = null;
+                                step();
+                            }, wait);
+                        });
+                    })();
+                }
+
+                session.timerId = setTimeout(() => {
+                    session.timerId = null;
+                    delayDone = true;
+                    maybeStartLoop();
+                }, REPEAT_DELAY_MS);
+
+                Promise.resolve(action()).then(() => {
+                    firstDone = true;
+                    maybeStartLoop();
+                });
+            }
+
+            function endPointer() {
+                if (pointerActive) {
+                    pointerActive = false;
+                    lastPointerEnd = Date.now();
+                }
+                stop();
+            }
+
+            btn.addEventListener('pointerdown', e => {
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                pointerActive = true;
+                if (btn.setPointerCapture) {
+                    try {
+                        btn.setPointerCapture(e.pointerId);
+                    } catch (_) {}
+                }
+                start();
+            });
+            btn.addEventListener('pointerup', endPointer);
+            btn.addEventListener('pointercancel', endPointer);
+            btn.addEventListener('lostpointercapture', endPointer);
+            btn.addEventListener('contextmenu', e => e.preventDefault());
+
+            btn.addEventListener('keydown', e => {
+                if (e.key !== ' ' && e.key !== 'Enter') return;
+                e.preventDefault();
+                if (!e.repeat) {
+                    start();
+                }
+            });
+            btn.addEventListener('keyup', e => {
+                if (e.key === ' ' || e.key === 'Enter') {
+                    stop();
+                }
+            });
+            btn.addEventListener('blur', stop);
+
+            btn.addEventListener('click', e => {
+                if (pointerActive || (Date.now() - lastPointerEnd < 500)) {
+                    e.preventDefault();
+                    return;
+                }
+                action();
+            });
+        }
+
+        function initRepeatButtons() {
+            document.querySelectorAll('[data-repeat-key]').forEach(btn => {
+                const key = btn.getAttribute('data-repeat-key');
+                bindHoldRepeat(btn, () => sendKey(key));
+            });
+            document.querySelectorAll('[data-repeat-vol]').forEach(btn => {
+                const delta = parseInt(btn.getAttribute('data-repeat-vol'), 10);
+                bindHoldRepeat(btn, () => sendVol(delta));
+            });
+        }
+
         document.onkeydown = function (e) {
             e = e || window.event;
             if (e.keyCode == '38') {
@@ -392,9 +544,17 @@
                 sendVol(-1) // down key
             }
         }
-        window.addEventListener('DOMContentLoaded', refreshState);
+        window.addEventListener('DOMContentLoaded', () => {
+            initRepeatButtons();
+            refreshState();
+        });
+        window.addEventListener('blur', () => {
+            if (stopActiveRepeat) stopActiveRepeat();
+        });
         document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) {
+            if (document.hidden) {
+                if (stopActiveRepeat) stopActiveRepeat();
+            } else {
                 refreshState();
             }
         });
@@ -411,41 +571,33 @@
     </div>
     <div class="remote">
         <div class="dpad">
-            <button class="mdc-button mdc-button--raised" onclick="onOff(false)">
-                <span class="mdc-button__ripple"></span>
-                <i class="material-icons">power_off</i>
-            </button>
-            <button class="mdc-button mdc-button--raised" onclick="sendKey('up')">
-                <span class="mdc-button__ripple"></span>
-                <i class="material-icons">keyboard_arrow_up</i>
-            </button>
-            <button class="mdc-button mdc-button--raised" onclick="onOff(true)">
-                <span class="mdc-button__ripple"></span>
-                <i class="material-icons">power</i>
-            </button>
-            <button class="mdc-button mdc-button--raised" onclick="sendKey('left')">
-                <span class="mdc-button__ripple"></span>
-                <i class="material-icons">keyboard_arrow_left</i>
-            </button>
-            <button class="mdc-button mdc-button--raised" onclick="sendKey('ok')">
-                <span class="mdc-button__ripple"></span>
-                OK
-            </button>
-            <button class="mdc-button mdc-button--raised" onclick="sendKey('right')">
-                <span class="mdc-button__ripple"></span>
-                <i class="material-icons">keyboard_arrow_right</i>
-            </button>
-            <button class="mdc-button mdc-button--raised" onclick="sendKey('back')">
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('back')" aria-label="Back">
                 <span class="mdc-button__ripple"></span>
                 <i class="material-icons">arrow_back</i>
             </button>
-            <button class="mdc-button mdc-button--raised" onclick="sendKey('down')">
+            <button class="mdc-button mdc-button--raised" data-repeat-key="up" aria-label="Up">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">keyboard_arrow_up</i>
+            </button>
+            <button id="power-btn" class="mdc-button mdc-button--raised" onclick="togglePower()" aria-label="Power" aria-pressed="false" title="Toggle power">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">power_settings_new</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" data-repeat-key="left" aria-label="Left">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">keyboard_arrow_left</i>
+            </button>
+            <button class="mdc-button mdc-button--raised" onclick="sendKey('ok')" aria-label="OK">
+                <span class="mdc-button__ripple"></span>
+                OK
+            </button>
+            <button class="mdc-button mdc-button--raised" data-repeat-key="right" aria-label="Right">
+                <span class="mdc-button__ripple"></span>
+                <i class="material-icons">keyboard_arrow_right</i>
+            </button>
+            <button class="mdc-button mdc-button--raised dpad-down" data-repeat-key="down" aria-label="Down">
                 <span class="mdc-button__ripple"></span>
                 <i class="material-icons">keyboard_arrow_down</i>
-            </button>
-            <button class="mdc-button mdc-button--raised" onclick="playPause()" aria-label="Play / Pause">
-                <span class="mdc-button__ripple"></span>
-                <i class="material-icons">play_arrow</i><i class="material-icons">pause</i>
             </button>
         </div>
         <div class="volume">
@@ -453,11 +605,11 @@
                 <span class="mdc-button__ripple"></span>
                 <i class="material-icons">volume_off</i>
             </button>
-            <button class="mdc-button mdc-button--raised" onclick="sendVol(-1)">
+            <button class="mdc-button mdc-button--raised" data-repeat-vol="-1" aria-label="Volume down">
                 <span class="mdc-button__ripple"></span>
                 <i class="material-icons">volume_down</i>
             </button>
-            <button class="mdc-button mdc-button--raised" onclick="sendVol(1)">
+            <button class="mdc-button mdc-button--raised" data-repeat-vol="1" aria-label="Volume up">
                 <span class="mdc-button__ripple"></span>
                 <i class="material-icons">volume_up</i>
             </button>

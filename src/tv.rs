@@ -51,7 +51,6 @@ pub trait TVConnection {
     fn mute(&mut self, mute: bool) -> Result<(), TVError>;
     fn get_mute(&mut self) -> Result<bool, TVError>;
     fn set_input(&mut self, input: Input) -> Result<(), TVError>;
-    fn play_pause(&mut self) -> Result<(), TVError>;
     fn send_key(&mut self, key: Key) -> Result<(), TVError>;
 }
 
@@ -112,10 +111,6 @@ impl TVConnection for FakeTV {
     }
     fn set_input(&mut self, input: Input) -> Result<(), TVError> {
         info!("FakeTV: set_input({:?})", input);
-        Ok(())
-    }
-    fn play_pause(&mut self) -> Result<(), TVError> {
-        info!("FakeTV: play_pause");
         Ok(())
     }
     fn send_key(&mut self, key: Key) -> Result<(), TVError> {

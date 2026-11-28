@@ -268,8 +268,8 @@ impl FulfillmentHandler {
                                     })
                                 }
                                 Execution::MediaPause {} | Execution::MediaResume {} => {
-                                    tv.play_pause().map_err(|err| {
-                                        error!("Failed to toggle play/pause: {}", err);
+                                    tv.send_key(tv::Key::Ok).map_err(|err| {
+                                        error!("Failed to pause/resume via OK key: {}", err);
                                         map_tv_error(&err)
                                     })
                                 }
@@ -426,12 +426,11 @@ mod tests {
                 .push(format!("set_input({})", name));
             Ok(())
         }
-        fn play_pause(&mut self) -> Result<(), TVError> {
-            self.calls.lock().unwrap().push("play_pause".to_string());
-            Ok(())
-        }
-        fn send_key(&mut self, _key: tv::Key) -> Result<(), TVError> {
-            self.calls.lock().unwrap().push("send_key".to_string());
+        fn send_key(&mut self, key: tv::Key) -> Result<(), TVError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("send_key({:?})", key));
             Ok(())
         }
     }
@@ -597,8 +596,8 @@ mod tests {
             vec![
                 "volume_change(25)",
                 "set_volume(20)",
-                "play_pause",
-                "play_pause"
+                "send_key(Ok)",
+                "send_key(Ok)"
             ]
         );
     }
